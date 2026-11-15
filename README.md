@@ -16,9 +16,9 @@ Full-stack **React + TypeScript + AWS Amplify Gen 2** hydraulic modeling workben
 5. **Coupled InfoWorks ICM Ground Infiltration Calibration**
    - Calibrates fast/medium RTK alongside InfoWorks ICM's physical **Soil Store** (`S_max`, `S_init`, `S_thresh`, `k_perc`, `p_perc`, `ET`) and **Groundwater Store** (`G_init`, `G_thresh`, `k_gwi`, `p_gwi`, `G_bf_thresh`, `k_bf`) using Differential Evolution + bounded pattern polish, outputting ready-to-import ICM parameter CSV tables.
 6. **AWS Amplify Gen 2 Backend (`amplify/`)**
-   - **Auth**: Amazon Cognito email login (`amplify/auth/resource.ts`)
-   - **Data**: AWS AppSync + DynamoDB `CalibrationProject` model (`amplify/data/resource.ts`)
-   - **Storage**: Amazon S3 bucket `rtkHydrologyStorage` for raw telemetry & exported tables (`amplify/storage/resource.ts`)
+   - **Auth (Login Gate)**: Amazon Cognito User Pool email sign-in, account registration with 6-digit email verification code, password reset, and signed-in header controls (`amplify/auth/resource.ts`, `src/components/AuthScreen.tsx`, `src/lib/authService.ts`)
+   - **Data**: Cognito User Pool-protected AWS AppSync + DynamoDB `CalibrationProject` model (`amplify/data/resource.ts`)
+   - **Storage**: Authenticated Amazon S3 bucket `rtkHydrologyStorage` for raw telemetry & exported tables (`amplify/storage/resource.ts`)
    - **Functions (Default Compute Engine)**: Serverless AWS Lambda `rtk-gim-calibrator` (Node 22, 2048 MB) executes all hydrological conditioning, 3-unit RTK fitting, and InfoWorks ICM 2-Store GIM Differential Evolution calibrations by default (`amplify/functions/rtk-gim-calibrator/`), using Gzip+Base64 GraphQL transport with automatic S3 overflow for multi-megabyte telemetry uploads.
 
 ## Local Development

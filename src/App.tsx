@@ -7,9 +7,11 @@ import {
   Download,
   FileUp,
   Layers,
+  LogOut,
   Play,
   RefreshCw,
   Sliders,
+  UserCheck,
   Waves,
 } from 'lucide-react';
 import CalibrationWorker from './worker/calibrationWorker?worker';
@@ -22,6 +24,7 @@ import { StormEventsPanel } from './components/StormEventsPanel';
 import { IcmGimPanel } from './components/IcmGimPanel';
 import { DwfAndPumpPanel } from './components/DwfAndPumpPanel';
 import { CloudSyncModal } from './components/CloudSyncModal';
+import { AuthScreen } from './components/AuthScreen';
 import {
   buildEventRtkCsv,
   buildIcmParametersCsv,
@@ -29,6 +32,11 @@ import {
 } from './engine/exporters';
 import { convertFlowFromMgd } from './engine/parser';
 import { invokeLambdaFullCalibration, isAmplifyConfigured } from './lib/amplifyCloud';
+import {
+  getActiveAuthUser,
+  signOutUser,
+  type AuthSessionUser,
+} from './lib/authService';
 import type {
   AnalysisConfig,
   AreaUnit,
@@ -58,6 +66,9 @@ const DEFAULT_CONFIG: AnalysisConfig = {
 };
 
 export const App: React.FC = () => {
+  const [authUser, setAuthUser] = useState<AuthSessionUser | null>(null);
+  const [authChecking, setAuthChecking] = useState<boolean>(true);
+
   const [config, setConfig] = useState<AnalysisConfig>(DEFAULT_CONFIG);
   const [displayFlowUnit, setDisplayFlowUnit] = useState<FlowUnit>('MGD');
   const [displayRainUnit, setDisplayRainUnit] = useState<RainUnit>('in/hr');
@@ -220,10 +231,43 @@ export const App: React.FC = () => {
     }
   }, [executeCalibration]);
 
-  // Auto-load TFM02 sample basin on initial mount
+  // Restore active Amazon Cognito / local preview session on startup
   useEffect(() => {
-    loadBuiltInSample();
-  }, [loadBuiltInSample]);
+    let active = true;
+    getActiveAuthUser()
+      .then((user) => {
+        if (active) {
+          setAuthUser(user);
+          setAuthChecking(false);
+        }
+      })
+      .catch(() => {
+        if (active) setAuthChecking(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Auto-load TFM02 sample basin only after user is authenticated
+  const hasLoadedForUserRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!authUser) {
+      hasLoadedForUserRef.current = null;
+      return;
+    }
+    if (hasLoadedForUserRef.current !== authUser.userId) {
+      hasLoadedForUserRef.current = authUser.userId;
+      void loadBuiltInSample();
+    }
+  }, [authUser, loadBuiltInSample]);
+
+  const handleSignOut = async () => {
+    reqIdRef.current += 1;
+    setIsCalibrating(false);
+    await signOutUser();
+    setAuthUser(null);
+  };
 
   const handleFileUpload = async (
     file: File | undefined,
@@ -257,6 +301,21 @@ export const App: React.FC = () => {
     setZoomDomain([Math.max(ts[0], startMs), Math.min(ts[ts.length - 1], endMs)]);
     if (enableRaw) setShowRaw5m(true);
   };
+
+  if (authChecking) {
+    return (
+      <div className="auth-checking-screen" role="status">
+        <div className="brand-glyph">
+          <Waves size={20} />
+        </div>
+        <span>Verifying session credentials...</span>
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return <AuthScreen onAuthenticated={(user) => setAuthUser(user)} />;
+  }
 
   return (
     <div className="app-shell">
@@ -334,6 +393,20 @@ export const App: React.FC = () => {
             <Cloud size={14} />
             {isAmplifyConfigured ? 'Amplify Cloud Connected' : 'AWS Amplify Sync'}
           </button>
+
+          <div className="user-session-pill" title={`Signed in as ${authUser.email}`}>
+            <UserCheck size={13} />
+            <span className="user-session-email">{authUser.displayName}</span>
+            <button
+              type="button"
+              className="user-signout-btn"
+              onClick={() => void handleSignOut()}
+              title="Sign out"
+            >
+              <LogOut size={13} />
+              <span>Sign out</span>
+            </button>
+          </div>
         </div>
       </header>
 

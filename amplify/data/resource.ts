@@ -23,11 +23,7 @@ const schema = a.schema({
       icmParametersJson: a.string(),
       diurnalJson: a.string(),
     })
-    .authorization((allow) => [
-      allow.guest(),
-      allow.authenticated(),
-      allow.publicApiKey(),
-    ]),
+    .authorization((allow) => [allow.authenticated()]),
 
   CloudCalibrationResponse: a.customType({
     ok: a.boolean().required(),
@@ -48,11 +44,7 @@ const schema = a.schema({
       rainText: a.string(),
     })
     .returns(a.ref('CloudCalibrationResponse'))
-    .authorization((allow) => [
-      allow.guest(),
-      allow.authenticated(),
-      allow.publicApiKey(),
-    ])
+    .authorization((allow) => [allow.authenticated()])
     .handler(a.handler.function(rtkGimCalibrator)),
 });
 
@@ -61,9 +53,6 @@ export type Schema = ClientSchema<typeof schema>;
 export const data = defineData({
   schema,
   authorizationModes: {
-    defaultAuthorizationMode: 'apiKey',
-    apiKeyAuthorizationMode: {
-      expiresInDays: 30,
-    },
+    defaultAuthorizationMode: 'userPool',
   },
 });
