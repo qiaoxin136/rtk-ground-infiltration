@@ -210,25 +210,124 @@ export async function loadCloudTelemetryFiles(
   return { flowText, rainText };
 }
 
-export async function invokeLambdaCalibration(
+const INLINE_GZIP_LIMIT_B64 = 620_000; // Safely below AppSync 1 MB HTTP payload limit
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const sub = bytes.subarray(i, i + chunkSize);
+    parts.push(String.fromCharCode(...sub));
+  }
+  return btoa(parts.join(''));
+}
+
+function base64ToUint8(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
+}
+
+export async function gzipStringToBytes(text: string): Promise<Uint8Array> {
+  const rawBytes = new TextEncoder().encode(text);
+  if (typeof CompressionStream === 'undefined') {
+    throw new Error('Browser CompressionStream API is unavailable.');
+  }
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  writer.write(rawBytes);
+  writer.close();
+  const ab = await new Response(cs.readable).arrayBuffer();
+  return new Uint8Array(ab);
+}
+
+export async function gunzipBytesToString(gzBytes: Uint8Array): Promise<string> {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('Browser DecompressionStream API is unavailable.');
+  }
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  writer.write(gzBytes as unknown as BufferSource);
+  writer.close();
+  const ab = await new Response(ds.readable).arrayBuffer();
+  return new TextDecoder().decode(ab);
+}
+
+export async function invokeLambdaFullCalibration(
   flowText: string,
   rainText: string,
-  config: AnalysisConfig
-): Promise<{ computeMs: number; summaryJson: string }> {
+  config: AnalysisConfig,
+  onProgress?: (pct: number, stage: string) => void
+): Promise<{
+  result: FullAnalysisResult;
+  computeMs: number;
+  transport: 'inline-gzip' | 's3-gzip';
+}> {
   const client = getClient();
   if (!client) {
-    throw new Error('AWS Amplify backend is not connected yet. Run `npx ampx sandbox` or deploy via Amplify Hosting.');
+    throw new Error(
+      'AWS Amplify backend is not connected (`amplify_outputs.json` missing). Deploy via AWS Amplify Hosting or run `npx ampx sandbox`.'
+    );
   }
+
+  onProgress?.(12, 'Compressing rainfall & sewer flow telemetry for AWS Lambda...');
+  const inputJson = JSON.stringify({ flowText, rainText });
+  const gzInputBytes = await gzipStringToBytes(inputJson);
+  const gzInputB64 = uint8ToBase64(gzInputBytes);
+
+  let transport: 'inline-gzip' | 's3-gzip' = 'inline-gzip';
+  let payloadGzipBase64: string | undefined = gzInputB64;
+  let s3InputPath: string | undefined;
+
+  if (gzInputB64.length > INLINE_GZIP_LIMIT_B64) {
+    transport = 's3-gzip';
+    s3InputPath = `telemetry/jobs/input-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json.gz`;
+    payloadGzipBase64 = undefined;
+    onProgress?.(24, 'Uploading large compressed telemetry to AWS S3...');
+    await uploadData({
+      path: s3InputPath,
+      data: gzInputBytes,
+      options: { contentType: 'application/gzip' },
+    }).result;
+  }
+
+  onProgress?.(45, 'Executing RTK + InfoWorks ICM 2-Store GIM on AWS Lambda...');
   const res = await client.queries.runCloudCalibration({
-    flowText,
-    rainText,
     configJson: JSON.stringify(config),
+    payloadGzipBase64,
+    s3InputPath,
   });
-  if (!res.data || !res.data.ok) {
-    throw new Error(res.data?.errorMessage ?? 'Lambda calibration failed.');
+
+  if (res.errors && res.errors.length > 0) {
+    throw new Error(res.errors.map((e) => e.message).join('; '));
   }
+  if (!res.data || !res.data.ok) {
+    throw new Error(res.data?.errorMessage ?? 'AWS Lambda calibration failed.');
+  }
+
+  onProgress?.(86, 'Decompressing calibrated hydrographs from AWS Lambda...');
+  let outGzBytes: Uint8Array;
+  if (res.data.resultGzipBase64) {
+    outGzBytes = base64ToUint8(res.data.resultGzipBase64);
+  } else if (res.data.s3OutputPath) {
+    transport = 's3-gzip';
+    const dl = await downloadData({ path: res.data.s3OutputPath }).result;
+    const blob = await dl.body.blob();
+    const ab = await blob.arrayBuffer();
+    outGzBytes = new Uint8Array(ab);
+  } else {
+    throw new Error('AWS Lambda returned an empty calibration payload.');
+  }
+
+  const outJson = await gunzipBytesToString(outGzBytes);
+  const fullResult = JSON.parse(outJson) as FullAnalysisResult;
+
   return {
+    result: fullResult,
     computeMs: res.data.computeMs ?? 0,
-    summaryJson: res.data.summaryJson,
+    transport,
   };
 }

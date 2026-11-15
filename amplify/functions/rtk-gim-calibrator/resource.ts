@@ -5,5 +5,5 @@ export const rtkGimCalibrator = defineFunction({
   entry: './handler.ts',
   runtime: 22,
   timeoutSeconds: 60,
-  memoryMB: 1024,
+  memoryMB: 2048,
 });

@@ -3,7 +3,7 @@ import { Authenticator } from '@aws-amplify/ui-react';
 import '@aws-amplify/ui-react/styles.css';
 import { Cloud, Cpu, Database, FolderOpen, Save, X } from 'lucide-react';
 import {
-  invokeLambdaCalibration,
+  invokeLambdaFullCalibration,
   isAmplifyConfigured,
   listSavedProjects,
   loadCloudTelemetryFiles,
@@ -20,6 +20,7 @@ interface CloudSyncModalProps {
   rainFileName: string;
   flowRawText: string;
   rainRawText: string;
+  onLambdaResult: (result: FullAnalysisResult, computeMs: number) => void;
   onLoadCloudRecord: (payload: {
     flowText: string;
     rainText: string;
@@ -37,6 +38,7 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
   rainFileName,
   flowRawText,
   rainRawText,
+  onLambdaResult,
   onLoadCloudRecord,
 }) => {
   const [records, setRecords] = useState<SavedBasinRecord[]>([]);
@@ -84,11 +86,12 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
 
   const handleLambdaVerify = async () => {
     if (!currentResult) return;
-    setBusyMsg('Executing serverless RTK + GIM calibration on AWS Lambda...');
+    setBusyMsg('Executing full RTK + InfoWorks ICM GIM calibration on AWS Lambda...');
     try {
-      const res = await invokeLambdaCalibration(flowRawText, rainRawText, currentResult.config);
+      const res = await invokeLambdaFullCalibration(flowRawText, rainRawText, currentResult.config);
+      onLambdaResult(res.result, res.computeMs);
       setStatusNotice(
-        `AWS Lambda rtk-gim-calibrator finished in ${(res.computeMs / 1000).toFixed(2)}s.`
+        `AWS Lambda rtk-gim-calibrator completed full calibration in ${(res.computeMs / 1000).toFixed(2)}s (${res.transport}).`
       );
     } catch (err) {
       setStatusNotice(err instanceof Error ? err.message : String(err));

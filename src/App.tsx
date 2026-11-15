@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Cloud,
   CloudRain,
+  Cpu,
   Database,
   Download,
   FileUp,
@@ -27,7 +28,7 @@ import {
   triggerTextDownload,
 } from './engine/exporters';
 import { convertFlowFromMgd } from './engine/parser';
-import { isAmplifyConfigured } from './lib/amplifyCloud';
+import { invokeLambdaFullCalibration, isAmplifyConfigured } from './lib/amplifyCloud';
 import type {
   AnalysisConfig,
   AreaUnit,
@@ -38,6 +39,8 @@ import type {
 } from './engine/types';
 
 type ActiveTab = 'events' | 'icm' | 'dwf';
+type ComputeEnginePreference = 'lambda' | 'worker';
+type ExecutionSource = 'aws-lambda' | 'local-fallback' | 'browser-worker';
 
 const DEFAULT_CONFIG: AnalysisConfig = {
   projectName: 'TFM02 Sewer Basin (268 ac)',
@@ -74,13 +77,36 @@ export const App: React.FC = () => {
   const [progressPct, setProgressPct] = useState<number>(0);
   const [progressStage, setProgressStage] = useState<string>('');
   const [computeDurationMs, setComputeDurationMs] = useState<number | null>(null);
+  const [computeEngine, setComputeEngine] = useState<ComputeEnginePreference>('lambda');
+  const [executionSource, setExecutionSource] = useState<ExecutionSource>(
+    isAmplifyConfigured ? 'aws-lambda' : 'local-fallback'
+  );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cloudModalOpen, setCloudModalOpen] = useState<boolean>(false);
 
   const workerRef = useRef<Worker | null>(null);
   const reqIdRef = useRef<number>(0);
+  const workerSourceRef = useRef<ExecutionSource>('browser-worker');
 
-  // Initialize Web Worker
+  const applyCalibrationOutput = useCallback(
+    (res: FullAnalysisResult, durationMs: number, source: ExecutionSource) => {
+      setIsCalibrating(false);
+      setProgressPct(100);
+      setComputeDurationMs(durationMs);
+      setExecutionSource(source);
+      setResult(res);
+      const ts = res.series15m.timestampsMs;
+      setZoomDomain([ts[0], ts[ts.length - 1]]);
+      // Preselect storm with longest continuous groundwater tail (or largest rainfall)
+      const sortedByTail = [...res.events].sort(
+        (a, b) => b.tailHoursGt01Mgd - a.tailHoursGt01Mgd || b.totalRainIn - a.totalRainIn
+      );
+      setSelectedEventId(sortedByTail[0]?.eventId ?? null);
+    },
+    []
+  );
+
+  // Initialize Web Worker (used only when offline/local dev or explicitly selected)
   useEffect(() => {
     const worker = new CalibrationWorker();
     workerRef.current = worker;
@@ -93,17 +119,7 @@ export const App: React.FC = () => {
         setProgressPct(msg.pct);
         setProgressStage(msg.stage);
       } else if (msg.type === 'RESULT') {
-        setIsCalibrating(false);
-        setProgressPct(100);
-        setComputeDurationMs(msg.durationMs);
-        setResult(msg.result);
-        const ts = msg.result.series15m.timestampsMs;
-        setZoomDomain([ts[0], ts[ts.length - 1]]);
-        // Preselect storm with longest continuous groundwater tail (or largest rainfall)
-        const sortedByTail = [...msg.result.events].sort(
-          (a, b) => b.tailHoursGt01Mgd - a.tailHoursGt01Mgd || b.totalRainIn - a.totalRainIn
-        );
-        setSelectedEventId(sortedByTail[0]?.eventId ?? null);
+        applyCalibrationOutput(msg.result, msg.durationMs, workerSourceRef.current);
       } else if (msg.type === 'ERROR') {
         setIsCalibrating(false);
         setErrorMsg(msg.message);
@@ -114,30 +130,67 @@ export const App: React.FC = () => {
       worker.terminate();
       workerRef.current = null;
     };
-  }, []);
+  }, [applyCalibrationOutput]);
 
-  const triggerWorkerRun = useCallback(
-    (fText: string, rText: string, cfg: AnalysisConfig) => {
+  const executeCalibration = useCallback(
+    async (
+      fText: string,
+      rText: string,
+      cfg: AnalysisConfig,
+      enginePref: ComputeEnginePreference = computeEngine
+    ) => {
       if (!fText.trim() || !rText.trim()) {
         setErrorMsg('Upload both a Rainfall file and a Sewer Flow file before running calibration.');
         return;
       }
       setErrorMsg(null);
       setIsCalibrating(true);
-      setProgressPct(2);
-      setProgressStage('Initializing hydrological worker...');
-
       reqIdRef.current += 1;
+      const myReqId = reqIdRef.current;
+
+      // Default path: execute all hydrological & InfoWorks ICM GIM calculations in AWS Lambda
+      if (enginePref === 'lambda' && isAmplifyConfigured) {
+        try {
+          setProgressPct(8);
+          setProgressStage('Dispatching calibration job to AWS Lambda (rtk-gim-calibrator)...');
+          const cloudRes = await invokeLambdaFullCalibration(fText, rText, cfg, (pct, stage) => {
+            if (reqIdRef.current === myReqId) {
+              setProgressPct(pct);
+              setProgressStage(stage);
+            }
+          });
+          if (reqIdRef.current !== myReqId) return;
+          applyCalibrationOutput(cloudRes.result, cloudRes.computeMs, 'aws-lambda');
+          return;
+        } catch (err) {
+          if (reqIdRef.current !== myReqId) return;
+          setIsCalibrating(false);
+          setErrorMsg(
+            `AWS Lambda calibration error: ${err instanceof Error ? err.message : String(err)}`
+          );
+          return;
+        }
+      }
+
+      // Local fallback only when running local Vite preview without amplify_outputs.json, or when user selects Browser Worker
+      workerSourceRef.current = enginePref === 'lambda' ? 'local-fallback' : 'browser-worker';
+      setProgressPct(2);
+      setProgressStage(
+        enginePref === 'lambda'
+          ? 'Local dev preview (no amplify_outputs.json) — running fallback worker...'
+          : 'Running in local browser Web Worker...'
+      );
+
       const payload: WorkerRunMessage = {
         type: 'RUN_CALIBRATION',
-        requestId: reqIdRef.current,
+        requestId: myReqId,
         flowText: fText,
         rainText: rText,
         config: cfg,
       };
       workerRef.current?.postMessage(payload);
     },
-    []
+    [computeEngine, applyCalibrationOutput]
   );
 
   const loadBuiltInSample = useCallback(async () => {
@@ -160,12 +213,12 @@ export const App: React.FC = () => {
       setConfig(DEFAULT_CONFIG);
       setDisplayFlowUnit('MGD');
       setDisplayRainUnit('in/hr');
-      triggerWorkerRun(fTxt, rTxt, DEFAULT_CONFIG);
+      void executeCalibration(fTxt, rTxt, DEFAULT_CONFIG, 'lambda');
     } catch (err) {
       setIsCalibrating(false);
       setErrorMsg(err instanceof Error ? err.message : String(err));
     }
-  }, [triggerWorkerRun]);
+  }, [executeCalibration]);
 
   // Auto-load TFM02 sample basin on initial mount
   useEffect(() => {
@@ -246,6 +299,22 @@ export const App: React.FC = () => {
               <option value="mm/hr">mm/hr</option>
               <option value="mm">mm/step</option>
             </select>
+          </div>
+
+          <div
+            className={`engine-status-pill ${
+              executionSource === 'aws-lambda' ? 'is-lambda' : ''
+            }`}
+            title="Default execution backend for all hydrological & InfoWorks ICM calibrations"
+          >
+            <Cpu size={13} />
+            <span>
+              {executionSource === 'aws-lambda'
+                ? 'AWS Lambda Active'
+                : computeEngine === 'lambda'
+                  ? 'AWS Lambda Default'
+                  : 'Browser Worker'}
+            </span>
           </div>
 
           <button
@@ -454,6 +523,18 @@ export const App: React.FC = () => {
               </label>
             </div>
 
+            <label className="field-label">
+              Compute Engine
+              <select
+                className="text-input"
+                value={computeEngine}
+                onChange={(e) => setComputeEngine(e.target.value as ComputeEnginePreference)}
+              >
+                <option value="lambda">AWS Lambda (Cloud Default)</option>
+                <option value="worker">Browser Worker (Local Offline)</option>
+              </select>
+            </label>
+
             <label className="filter-check pump-toggle">
               <input
                 type="checkbox"
@@ -467,10 +548,16 @@ export const App: React.FC = () => {
               type="button"
               className="btn-primary run-btn"
               disabled={isCalibrating}
-              onClick={() => triggerWorkerRun(flowRawText, rainRawText, config)}
+              onClick={() => void executeCalibration(flowRawText, rainRawText, config)}
             >
               <Play size={15} />
-              {isCalibrating ? 'Calibrating Model...' : 'Calculate RTK + ICM GIM'}
+              {isCalibrating
+                ? computeEngine === 'lambda' && isAmplifyConfigured
+                  ? 'Running on AWS Lambda...'
+                  : 'Calibrating Model...'
+                : computeEngine === 'lambda'
+                  ? 'Calculate on AWS Lambda'
+                  : 'Calculate RTK + ICM GIM'}
             </button>
 
             {isCalibrating && (
@@ -569,10 +656,13 @@ export const App: React.FC = () => {
                     Daily NSE {result.gim.metrics.nseDaily.toFixed(3)}
                   </strong>
                   <small>
-                    15m NSE {result.gim.metrics.nse15m.toFixed(3)} · Vol{' '}
-                    {result.gim.metrics.volumeErrorPct >= 0 ? '+' : ''}
-                    {result.gim.metrics.volumeErrorPct.toFixed(2)}%
-                    {computeDurationMs ? ` · ${(computeDurationMs / 1000).toFixed(1)}s` : ''}
+                    15m NSE {result.gim.metrics.nse15m.toFixed(3)} ·{' '}
+                    {executionSource === 'aws-lambda'
+                      ? 'AWS Lambda'
+                      : executionSource === 'local-fallback'
+                        ? 'Lambda (Dev Local)'
+                        : 'Local Worker'}
+                    {computeDurationMs ? ` ${(computeDurationMs / 1000).toFixed(1)}s` : ''}
                   </small>
                 </div>
               </div>
@@ -658,6 +748,7 @@ export const App: React.FC = () => {
         rainFileName={rainFileName}
         flowRawText={flowRawText}
         rainRawText={rainRawText}
+        onLambdaResult={(res, ms) => applyCalibrationOutput(res, ms, 'aws-lambda')}
         onLoadCloudRecord={({
           flowText,
           rainText,
@@ -673,7 +764,7 @@ export const App: React.FC = () => {
           setConfig(merged);
           setDisplayFlowUnit(merged.flowUnit);
           setDisplayRainUnit(merged.rainUnit);
-          triggerWorkerRun(flowText, rainText, merged);
+          void executeCalibration(flowText, rainText, merged);
         }}
       />
     </div>

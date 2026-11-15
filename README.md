@@ -19,7 +19,7 @@ Full-stack **React + TypeScript + AWS Amplify Gen 2** hydraulic modeling workben
    - **Auth**: Amazon Cognito email login (`amplify/auth/resource.ts`)
    - **Data**: AWS AppSync + DynamoDB `CalibrationProject` model (`amplify/data/resource.ts`)
    - **Storage**: Amazon S3 bucket `rtkHydrologyStorage` for raw telemetry & exported tables (`amplify/storage/resource.ts`)
-   - **Functions**: Serverless AWS Lambda `rtk-gim-calibrator` running the shared TypeScript hydrology engine (`amplify/functions/rtk-gim-calibrator/`)
+   - **Functions (Default Compute Engine)**: Serverless AWS Lambda `rtk-gim-calibrator` (Node 22, 2048 MB) executes all hydrological conditioning, 3-unit RTK fitting, and InfoWorks ICM 2-Store GIM Differential Evolution calibrations by default (`amplify/functions/rtk-gim-calibrator/`), using Gzip+Base64 GraphQL transport with automatic S3 overflow for multi-megabyte telemetry uploads.
 
 ## Local Development
 

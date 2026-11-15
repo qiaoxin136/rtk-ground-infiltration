@@ -31,7 +31,9 @@ const schema = a.schema({
 
   CloudCalibrationResponse: a.customType({
     ok: a.boolean().required(),
-    summaryJson: a.string().required(),
+    resultGzipBase64: a.string(),
+    s3OutputPath: a.string(),
+    summaryJson: a.string(),
     computeMs: a.integer(),
     errorMessage: a.string(),
   }),
@@ -39,9 +41,11 @@ const schema = a.schema({
   runCloudCalibration: a
     .query()
     .arguments({
-      flowText: a.string().required(),
-      rainText: a.string().required(),
       configJson: a.string().required(),
+      payloadGzipBase64: a.string(),
+      s3InputPath: a.string(),
+      flowText: a.string(),
+      rainText: a.string(),
     })
     .returns(a.ref('CloudCalibrationResponse'))
     .authorization((allow) => [
