@@ -65,21 +65,31 @@ export const DwfAndPumpPanel: React.FC<DwfAndPumpPanelProps> = ({
 
         <div className="dwf-stat-strip">
           <div>
-            <span>Weekday Mean</span>
+            <span>Weekday Diurnal Mean</span>
             <strong className="mono-val">
               {convertFlowFromMgd(dwf.weekdayMeanMgd, displayFlowUnit).toFixed(3)} {displayFlowUnit}
             </strong>
           </div>
           <div>
-            <span>Weekend Mean</span>
+            <span>Weekend Diurnal Mean</span>
             <strong className="mono-val">
               {convertFlowFromMgd(dwf.weekendMeanMgd, displayFlowUnit).toFixed(3)} {displayFlowUnit}
             </strong>
           </div>
           <div>
-            <span>Weighted Average DWF</span>
-            <strong className="mono-val accent-teal">
+            <span>Weighted Diurnal Mean</span>
+            <strong className="mono-val">
               {convertFlowFromMgd(dwf.weightedMeanMgd, displayFlowUnit).toFixed(3)} {displayFlowUnit}
+            </strong>
+          </div>
+          <div>
+            <span>Baseline + Diurnal Mean</span>
+            <strong className="mono-val accent-teal">
+              {convertFlowFromMgd(
+                result.baselineFlowMgd + dwf.weightedMeanMgd,
+                displayFlowUnit
+              ).toFixed(3)}{' '}
+              {displayFlowUnit}
             </strong>
           </div>
         </div>

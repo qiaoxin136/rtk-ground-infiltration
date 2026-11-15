@@ -110,15 +110,18 @@ export function buildAlignedSeriesCsv(res: FullAnalysisResult): string {
     'Rain_in_hr',
     'Rain_Depth_in',
     'Flow_Obs_Smoothed_MGD',
-    'DWF_Baseline_MGD',
-    'Modeled_Total_MGD',
+    'Baseline_Flow_MGD',
+    'Diurnal_Flow_MGD',
+    'Base_Plus_Diurnal_MGD',
     'RTK_RDII_MGD',
     'ICM_GWI_Tail_MGD',
+    'Modeled_Total_MGD',
     'Soil_Store_in',
     'GW_Store_in',
   ];
   const lines = [headers.join(',')];
   const s = res.series15m;
+  const baseStr = res.baselineFlowMgd.toFixed(4);
   for (let i = 0; i < s.timestampsMs.length; i++) {
     lines.push(
       [
@@ -126,10 +129,12 @@ export function buildAlignedSeriesCsv(res: FullAnalysisResult): string {
         s.rainInHr[i].toFixed(4),
         s.rainDepthIn[i].toFixed(4),
         s.flowObservedSmoothMgd[i].toFixed(4),
+        baseStr,
+        s.diurnalFlowMgd[i].toFixed(4),
         s.dwfBaselineMgd[i].toFixed(4),
-        s.modeledTotalMgd[i].toFixed(4),
         s.rtkFastMedMgd[i].toFixed(4),
         s.gimGroundwaterMgd[i].toFixed(4),
+        s.modeledTotalMgd[i].toFixed(4),
         s.soilStorageIn[i].toFixed(4),
         s.gwStorageIn[i].toFixed(4),
       ].join(',')

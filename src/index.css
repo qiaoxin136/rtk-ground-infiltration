@@ -249,6 +249,18 @@ select:focus-visible {
   gap: 8px;
 }
 
+.formula-pill-note {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--flow-teal);
+  background: #f0f9f8;
+  border: 1px solid #cce7e4;
+  border-radius: 5px;
+  padding: 5px 8px;
+  margin-top: -2px;
+}
+
 /* Upload Boxes */
 .upload-box {
   background: var(--bg-subtle);
@@ -986,7 +998,7 @@ select:focus-visible {
 /* DWF & Pump Diagnostics */
 .dwf-stat-strip {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 8px;
   background: var(--bg-subtle);
   border: 1px solid var(--border-rule);

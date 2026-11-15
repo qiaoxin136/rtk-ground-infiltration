@@ -56,6 +56,7 @@ const DEFAULT_CONFIG: AnalysisConfig = {
   rainUnit: 'in/hr',
   areaValue: 268,
   areaUnit: 'acres',
+  baselineFlowMgd: 0,
   smoothWindowMinOverride: null,
   enablePumpSmoothing: true,
   interEventGapHours: 24,
@@ -70,6 +71,7 @@ export const App: React.FC = () => {
   const [authChecking, setAuthChecking] = useState<boolean>(true);
 
   const [config, setConfig] = useState<AnalysisConfig>(DEFAULT_CONFIG);
+  const [baselineInput, setBaselineInput] = useState<string>('0');
   const [displayFlowUnit, setDisplayFlowUnit] = useState<FlowUnit>('MGD');
   const [displayRainUnit, setDisplayRainUnit] = useState<RainUnit>('in/hr');
 
@@ -222,6 +224,7 @@ export const App: React.FC = () => {
       setFlowRawText(fTxt);
       setRainRawText(rTxt);
       setConfig(DEFAULT_CONFIG);
+      setBaselineInput(String(DEFAULT_CONFIG.baselineFlowMgd));
       setDisplayFlowUnit('MGD');
       setDisplayRainUnit('in/hr');
       void executeCalibration(fTxt, rTxt, DEFAULT_CONFIG, 'lambda');
@@ -498,7 +501,7 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Contributing Service Area */}
+            {/* Contributing Service Area & Baseline Flow */}
             <div className="eyebrow-tag section-sep">2 · BASIN &amp; MODEL SETTINGS</div>
             <div className="split-field-row">
               <label className="field-label">
@@ -527,6 +530,27 @@ export const App: React.FC = () => {
                   <option value="km2">km²</option>
                 </select>
               </label>
+            </div>
+
+            <label className="field-label">
+              Baseline Flow (MGD)
+              <input
+                type="number"
+                step="0.05"
+                className="text-input mono-input"
+                value={baselineInput}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setBaselineInput(raw);
+                  const parsed = raw === '' || raw === '-' ? 0 : Number(raw);
+                  if (Number.isFinite(parsed)) {
+                    setConfig({ ...config, baselineFlowMgd: parsed });
+                  }
+                }}
+              />
+            </label>
+            <div className="formula-pill-note">
+              Total Flow = Baseline + Diurnal + RTK + Groundwater Infiltration
             </div>
 
             <div className="split-field-row">
@@ -704,12 +728,19 @@ export const App: React.FC = () => {
                 </div>
 
                 <div className="ledger-cell">
-                  <span className="ledger-label">WEIGHTED DWF</span>
+                  <span className="ledger-label">BASELINE + DIURNAL</span>
                   <strong className="mono-val accent-teal">
-                    {convertFlowFromMgd(result.dwf.weightedMeanMgd, displayFlowUnit).toFixed(3)}{' '}
+                    {convertFlowFromMgd(
+                      result.baselineFlowMgd + result.dwf.weightedMeanMgd,
+                      displayFlowUnit
+                    ).toFixed(3)}{' '}
                     {displayFlowUnit}
                   </strong>
-                  <small>{result.dwf.cleanDryDayCount} clean dry days isolated</small>
+                  <small>
+                    Base {convertFlowFromMgd(result.baselineFlowMgd, displayFlowUnit).toFixed(2)} +
+                    Diurnal {convertFlowFromMgd(result.dwf.weightedMeanMgd, displayFlowUnit).toFixed(3)}{' '}
+                    ({result.dwf.cleanDryDayCount}d)
+                  </small>
                 </div>
 
                 <div className="ledger-cell">
@@ -830,6 +861,7 @@ export const App: React.FC = () => {
           partialConfig,
         }) => {
           const merged: AnalysisConfig = { ...config, ...partialConfig };
+          setBaselineInput(String(merged.baselineFlowMgd ?? 0));
           setFlowFileName(fName);
           setRainFileName(rName);
           setFlowRawText(flowText);

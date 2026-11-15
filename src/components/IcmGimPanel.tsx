@@ -91,7 +91,10 @@ export const IcmGimPanel: React.FC<IcmGimPanelProps> = ({ result }) => {
         <div className="instrument-panel">
           <div className="eyebrow-tag">INFOWORKS ICM 2-STORE ARCHITECTURE</div>
           <h3 className="panel-title">Coupled RTK + Soil &amp; Groundwater Store Schematic</h3>
-          <p className="panel-subtitle">{gim.reason}</p>
+          <p className="panel-subtitle">
+            {gim.reason} Superposition:{' '}
+            <strong>Total Flow = Baseline ({result.baselineFlowMgd.toFixed(2)} MGD) + Diurnal + RTK + GWI</strong>.
+          </p>
 
           <svg
             viewBox="0 0 540 250"

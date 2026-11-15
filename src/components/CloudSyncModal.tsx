@@ -114,6 +114,7 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
             projectName: rec.projectName,
             areaValue: rec.areaValue,
             areaUnit: rec.areaUnit as AreaUnit,
+            baselineFlowMgd: rec.baselineFlowMgd ?? 0,
             flowUnit: rec.flowUnit as FlowUnit,
             rainUnit: rec.rainUnit as RainUnit,
           },

@@ -16,6 +16,7 @@ const config: AnalysisConfig = {
   rainUnit: 'in/hr',
   areaValue: 268,
   areaUnit: 'acres',
+  baselineFlowMgd: 0,
   smoothWindowMinOverride: null,
   enablePumpSmoothing: true,
   interEventGapHours: 24,
@@ -55,4 +56,36 @@ if (res.events.length < 10) {
 if (!res.gim.enabled || res.gim.metrics.nseDaily < 0.78) {
   throw new Error(`Expected coupled GIM NSE_daily >= 0.78, got ${res.gim.metrics.nseDaily}`);
 }
+
+// Verify exact 4-term superposition for both baselineFlowMgd = 0 and baselineFlowMgd = 0.25 MGD
+for (let i = 0; i < res.series15m.modeledTotalMgd.length; i++) {
+  const sum4 =
+    res.baselineFlowMgd +
+    res.series15m.diurnalFlowMgd[i] +
+    res.series15m.rtkFastMedMgd[i] +
+    res.series15m.gimGroundwaterMgd[i];
+  if (Math.abs(res.series15m.modeledTotalMgd[i] - sum4) > 1e-11) {
+    throw new Error(`Superposition mismatch at step ${i}: ${res.series15m.modeledTotalMgd[i]} vs ${sum4}`);
+  }
+}
+
+const resOffset = runFullHydrologyPipeline(flowText, rainText, {
+  ...config,
+  baselineFlowMgd: 0.25,
+  optimizerIterations: 15,
+});
+if (Math.abs(resOffset.baselineFlowMgd - 0.25) > 1e-12) {
+  throw new Error(`Expected baselineFlowMgd=0.25, got ${resOffset.baselineFlowMgd}`);
+}
+for (let i = 0; i < resOffset.series15m.modeledTotalMgd.length; i++) {
+  const sum4 =
+    resOffset.baselineFlowMgd +
+    resOffset.series15m.diurnalFlowMgd[i] +
+    resOffset.series15m.rtkFastMedMgd[i] +
+    resOffset.series15m.gimGroundwaterMgd[i];
+  if (Math.abs(resOffset.series15m.modeledTotalMgd[i] - sum4) > 1e-11) {
+    throw new Error(`Offset superposition mismatch at step ${i}: ${resOffset.series15m.modeledTotalMgd[i]} vs ${sum4}`);
+  }
+}
+console.log('Verified 4-term superposition: Total Flow = Baseline + Diurnal + RTK + GWI (exact across 9,985 steps)');
 console.log('ALL HYDROLOGY ENGINE VERIFICATION CHECKS PASSED!');

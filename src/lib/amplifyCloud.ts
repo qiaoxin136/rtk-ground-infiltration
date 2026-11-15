@@ -35,6 +35,7 @@ export interface SavedBasinRecord {
   createdAt: string;
   areaValue: number;
   areaUnit: string;
+  baselineFlowMgd?: number;
   flowUnit: string;
   rainUnit: string;
   flowFileName: string;
@@ -64,6 +65,7 @@ export async function listSavedProjects(): Promise<SavedBasinRecord[]> {
           createdAt: item.createdAt ?? new Date().toISOString(),
           areaValue: item.areaValue,
           areaUnit: item.areaUnit,
+          baselineFlowMgd: item.baselineFlowMgd ?? 0,
           flowUnit: item.flowUnit,
           rainUnit: item.rainUnit,
           flowFileName: item.flowFileName ?? 'flow.txt',
@@ -129,6 +131,7 @@ export async function saveCalibrationRecord(
       projectName: result.config.projectName,
       areaValue: result.config.areaValue,
       areaUnit: result.config.areaUnit,
+      baselineFlowMgd: result.baselineFlowMgd,
       flowUnit: result.config.flowUnit,
       rainUnit: result.config.rainUnit,
       flowFileName,
@@ -153,6 +156,7 @@ export async function saveCalibrationRecord(
         createdAt: created.data.createdAt ?? new Date().toISOString(),
         areaValue: created.data.areaValue,
         areaUnit: created.data.areaUnit,
+        baselineFlowMgd: created.data.baselineFlowMgd ?? result.baselineFlowMgd,
         flowUnit: created.data.flowUnit,
         rainUnit: created.data.rainUnit,
         flowFileName,
@@ -177,6 +181,7 @@ export async function saveCalibrationRecord(
     createdAt: new Date().toISOString(),
     areaValue: result.config.areaValue,
     areaUnit: result.config.areaUnit,
+    baselineFlowMgd: result.baselineFlowMgd,
     flowUnit: result.config.flowUnit,
     rainUnit: result.config.rainUnit,
     flowFileName,

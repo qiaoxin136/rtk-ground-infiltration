@@ -15,6 +15,7 @@ export interface AnalysisConfig {
   rainUnit: RainUnit;
   areaValue: number;
   areaUnit: AreaUnit;
+  baselineFlowMgd: number; // Constant baseline flow offset (MGD) added to Diurnal + RTK + GWI
   smoothWindowMinOverride: number | null; // null = auto-detect from pump cycle
   enablePumpSmoothing: boolean;
   interEventGapHours: number;
@@ -118,7 +119,7 @@ export interface CoupledGimResult {
   gInitFt: number;
   gThreshFt: number;
   gBfThreshFt: number;
-  baseOffsetMgd: number;
+  baselineFlowMgd: number;
   metrics: {
     nse15m: number;
     nseDaily: number;
@@ -135,6 +136,7 @@ export interface AlignedSeries15m {
   rainDepthIn: number[];
   flowObservedSmoothMgd: number[];
   flowRawInterpMgd: number[];
+  diurnalFlowMgd: number[];
   dwfBaselineMgd: number[];
   modeledTotalMgd: number[];
   rtkFastMedMgd: number[];
@@ -153,6 +155,7 @@ export interface HighResFlowSeries {
 export interface FullAnalysisResult {
   config: AnalysisConfig;
   areaAcres: number;
+  baselineFlowMgd: number;
   mgPerInchOverArea: number;
   periodStartIso: string;
   periodEndIso: string;

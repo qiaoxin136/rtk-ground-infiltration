@@ -5,7 +5,8 @@ Full-stack **React + TypeScript + AWS Amplify Gen 2** hydraulic modeling workben
 ## Key Capabilities
 
 1. **Flexible Telemetry Upload & Unit Conversion**
-   - Upload two-column CSV, TSV, or InfoWorks `CustomFile` `.txt` files for **Rainfall** (`in/hr`, `in`, `mm/hr`, `mm`) and **Sewer Flow** (`MGD`, `cfs`, `gpm`, `L/s`, `m³/s`) with configurable contributing **Service Area** (`acres`, `hectares`, `sq mi`, `km²`).
+   - Upload two-column CSV, TSV, or InfoWorks `CustomFile` `.txt` files for **Rainfall** (`in/hr`, `in`, `mm/hr`, `mm`) and **Sewer Flow** (`MGD`, `cfs`, `gpm`, `L/s`, `m³/s`) with configurable contributing **Service Area** (`acres`, `hectares`, `sq mi`, `km²`) and **Baseline Flow (MGD)**.
+   - Enforces exact 4-term hydrograph superposition: `Total Flow = Baseline Flow + Diurnal Flow + RTK + Groundwater Infiltration`.
    - Built-in one-click sample dataset (`TFM02.txt` + `Rainfall.txt`, 268 acres).
 2. **Upstream Pump-Cycle Detection & Zero-Phase Conditioning**
    - Automatically detects lift-station pump cycling intervals and applies a 2-pass centered running average matched to the cycle period.

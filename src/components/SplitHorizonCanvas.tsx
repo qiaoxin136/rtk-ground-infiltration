@@ -36,6 +36,8 @@ interface HoverReadout {
   rainVal: number;
   obsSmoothVal: number;
   rawFlowVal: number | null;
+  baselineVal: number;
+  diurnalVal: number;
   dwfVal: number;
   modeledVal: number;
   rtkVal: number;
@@ -542,6 +544,17 @@ export const SplitHorizonCanvas: React.FC<SplitHorizonCanvasProps> = ({
     };
 
     if (showDwf) {
+      if (result.baselineFlowMgd > 0) {
+        const yBase = yOfFlow(convertFlowFromMgd(result.baselineFlowMgd, displayFlowUnit));
+        ctx.strokeStyle = '#0F766E';
+        ctx.lineWidth = 1.15;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(padLeft, yBase);
+        ctx.lineTo(padLeft + plotW, yBase);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       draw15mSeries(s15.dwfBaselineMgd, '#2E7D32', 1.35, [5, 4]);
     }
     if (showPureRtk) {
@@ -776,6 +789,11 @@ export const SplitHorizonCanvas: React.FC<SplitHorizonCanvasProps> = ({
       rainVal: convertRainIntensityFromInHr(s15.rainInHr[idx], displayRainUnit, 0.25),
       obsSmoothVal: convertFlowFromMgd(s15.flowObservedSmoothMgd[idx], displayFlowUnit),
       rawFlowVal: rawVal,
+      baselineVal: convertFlowFromMgd(result.baselineFlowMgd, displayFlowUnit),
+      diurnalVal: convertFlowFromMgd(
+        s15.diurnalFlowMgd?.[idx] ?? s15.dwfBaselineMgd[idx] - result.baselineFlowMgd,
+        displayFlowUnit
+      ),
       dwfVal: convertFlowFromMgd(s15.dwfBaselineMgd[idx], displayFlowUnit),
       modeledVal: convertFlowFromMgd(s15.modeledTotalMgd[idx], displayFlowUnit),
       rtkVal: convertFlowFromMgd(s15.rtkFastMedMgd[idx], displayFlowUnit),
@@ -949,7 +967,7 @@ export const SplitHorizonCanvas: React.FC<SplitHorizonCanvasProps> = ({
               onChange={(e) => setShowDwf(e.target.checked)}
             />
             <span className="swatch swatch-dwf" />
-            DWF
+            Base + Diurnal
           </label>
           {result.gim.enabled && (
             <label className="series-chip">
@@ -994,7 +1012,8 @@ export const SplitHorizonCanvas: React.FC<SplitHorizonCanvasProps> = ({
               Modeled: <strong>{hover.modeledVal.toFixed(3)}</strong> {displayFlowUnit}
             </span>
             <span className="mono-val dwf-text">
-              DWF: <strong>{hover.dwfVal.toFixed(3)}</strong>
+              Base / Diurnal: <strong>{hover.baselineVal.toFixed(3)}</strong> /{' '}
+              <strong>{hover.diurnalVal.toFixed(3)}</strong>
             </span>
             <span className="mono-val gwi-text">
               RTK / GWI: <strong>{hover.rtkVal.toFixed(3)}</strong> /{' '}

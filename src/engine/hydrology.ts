@@ -549,7 +549,8 @@ function fitEventsRtk(
   flow15m: Float64Array,
   rain15mInHr: Float64Array,
   rain15mIn: Float64Array,
-  dwf15m: Float64Array,
+  basePlusDiurnal15m: Float64Array,
+  baselineFlowMgd: number,
   mgPerIn: number,
   gapHours: number,
   minEventIn: number,
@@ -611,14 +612,15 @@ function fitEventsRtk(
     const winEndIdx = Math.min(nextStartIdx - 1, eIdx + sixDaysSteps, n - 1);
     if (winEndIdx <= sIdx + 2) continue;
 
-    // Pre-storm 12-hour antecedent offset
+    // Pre-storm 12-hour antecedent offset (when user sets explicit Baseline Flow, prevent negative cancellation)
     const preStart = Math.max(0, sIdx - 48);
     const preEnd = sIdx - 1;
     let preOffset = 0;
     if (preEnd >= preStart) {
       const diffs: number[] = [];
-      for (let k = preStart; k <= preEnd; k++) diffs.push(flow15m[k] - dwf15m[k]);
-      preOffset = Math.max(-0.15, Math.min(0.06, medianOfNumbers(diffs)));
+      for (let k = preStart; k <= preEnd; k++) diffs.push(flow15m[k] - basePlusDiurnal15m[k]);
+      const minPre = Math.abs(baselineFlowMgd) > 1e-6 ? 0 : -0.15;
+      preOffset = Math.max(minPre, Math.min(0.06, medianOfNumbers(diffs)));
     }
 
     const winLen = winEndIdx - sIdx + 1;
@@ -635,7 +637,7 @@ function fitEventsRtk(
         totRainIn += rain15mIn[gIdx];
         if (rain15mInHr[gIdx] > peakInHr) peakInHr = rain15mInHr[gIdx];
       }
-      const rdii = Math.max(0, flow15m[gIdx] - dwf15m[gIdx] - preOffset);
+      const rdii = Math.max(0, flow15m[gIdx] - basePlusDiurnal15m[gIdx] - preOffset);
       obsEv[k] = rdii;
       if (rdii > peakRdii) peakRdii = rdii;
     }
@@ -685,7 +687,7 @@ function fitEventsRtk(
     let tailPts = 0;
     let passedPeak = false;
     for (let k = eIdx; k <= postEndIdx; k++) {
-      const ex = flow15m[k] - dwf15m[k] - preOffset;
+      const ex = flow15m[k] - basePlusDiurnal15m[k] - preOffset;
       if (ex > 0.12) passedPeak = true;
       if (ex > 0.10) tailPts++;
 
@@ -693,7 +695,7 @@ function fitEventsRtk(
         const w0 = Math.max(eIdx, k - 47);
         let rollSum = 0;
         for (let m = w0; m <= k; m++) {
-          rollSum += flow15m[m] - dwf15m[m] - preOffset;
+          rollSum += flow15m[m] - basePlusDiurnal15m[m] - preOffset;
         }
         const rollMean = rollSum / (k - w0 + 1);
         if (rollMean < 0.06) break;
@@ -739,12 +741,14 @@ function fitEventsRtk(
 
 /**
  * Simulate Coupled 2-Unit RTK + InfoWorks ICM 2-Store Ground Infiltration Module (GIM).
+ * Enforces exact superposition: Total Flow = Baseline Flow + Diurnal Flow + RTK + Groundwater Infiltration.
  */
 export function simulateCoupledGim(
   params: readonly number[],
   rain15mIn: Float64Array,
   rainMgdPrescaled: Float64Array,
-  dwf15m: Float64Array,
+  diurnal15m: Float64Array,
+  baselineFlowMgd: number,
   mgPerIn: number,
   qModOut: Float64Array,
   qRtkOut: Float64Array,
@@ -757,7 +761,7 @@ export function simulateCoupledGim(
     R2, T2, K2,
     fInfil,
     sMax, sInit, sThresh, kPerc, pPerc, etDay,
-    gInit, gThresh, kGwi, pGwi, gBfThresh, kBf, baseOff,
+    gInit, gThresh, kGwi, pGwi, gBfThresh, kBf,
   ] = params;
 
   const n = rain15mIn.length;
@@ -805,7 +809,7 @@ export function simulateCoupledGim(
     }
 
     qGwiOut[i] = gwiRateMgd;
-    qModOut[i] = dwf15m[i] + baseOff + qRtkOut[i] + gwiRateMgd;
+    qModOut[i] = baselineFlowMgd + diurnal15m[i] + qRtkOut[i] + gwiRateMgd;
     if (soilOut) soilOut[i] = s;
     if (gwOut) gwOut[i] = g;
   }
@@ -819,7 +823,8 @@ function calibrateCoupledSystem(
   gridStartMs: number,
   flow15m: Float64Array,
   rain15mIn: Float64Array,
-  dwf15m: Float64Array,
+  diurnal15m: Float64Array,
+  baselineFlowMgd: number,
   mgPerIn: number,
   areaAcres: number,
   dwfWeightedMgd: number,
@@ -874,7 +879,7 @@ function calibrateCoupledSystem(
       simulateThreeUnitRtk(rain15mIn, mgPerIn, p, rtkOnlyBuf);
       let sse = 0;
       for (let i = 0; i < n; i++) {
-        const e = flow15m[i] - (dwf15m[i] + rtkOnlyBuf[i]);
+        const e = flow15m[i] - (baselineFlowMgd + diurnal15m[i] + rtkOnlyBuf[i]);
         sse += e * e;
       }
       return sse / n;
@@ -885,7 +890,9 @@ function calibrateCoupledSystem(
   );
   simulateThreeUnitRtk(rain15mIn, mgPerIn, rtkContRes.x, rtkOnlyBuf);
   const pureLinearRtkTotalMgd = new Float64Array(n);
-  for (let i = 0; i < n; i++) pureLinearRtkTotalMgd[i] = dwf15m[i] + rtkOnlyBuf[i];
+  for (let i = 0; i < n; i++) {
+    pureLinearRtkTotalMgd[i] = baselineFlowMgd + diurnal15m[i] + rtkOnlyBuf[i];
+  }
 
   const qMod = new Float64Array(n);
   const qRtk = new Float64Array(n);
@@ -927,7 +934,7 @@ function calibrateCoupledSystem(
         gInitFt: 0,
         gThreshFt: 0,
         gBfThreshFt: 0,
-        baseOffsetMgd: 0,
+        baselineFlowMgd: Number(baselineFlowMgd.toFixed(4)),
         metrics,
         icmRows: [],
       },
@@ -957,11 +964,20 @@ function calibrateCoupledSystem(
     [1.0, 1.8],                              // p_gwi (-)
     [0.0, 3.5],                              // G_bf_thresh (in)
     [0.001, 0.10],                           // k_bf (day^-1)
-    [-0.12, 0.06],                           // base_off (MGD)
   ];
 
   const objGim = (p: readonly number[]) => {
-    simulateCoupledGim(p, rain15mIn, rainMgd, dwf15m, mgPerIn, qMod, qRtk, qGwi);
+    simulateCoupledGim(
+      p,
+      rain15mIn,
+      rainMgd,
+      diurnal15m,
+      baselineFlowMgd,
+      mgPerIn,
+      qMod,
+      qRtk,
+      qGwi
+    );
     modDaily.fill(0);
     let sse15 = 0;
     for (let i = 0; i < n; i++) {
@@ -988,7 +1004,19 @@ function calibrateCoupledSystem(
     },
   });
 
-  simulateCoupledGim(opt.x, rain15mIn, rainMgd, dwf15m, mgPerIn, qMod, qRtk, qGwi, soilSt, gwSt);
+  simulateCoupledGim(
+    opt.x,
+    rain15mIn,
+    rainMgd,
+    diurnal15m,
+    baselineFlowMgd,
+    mgPerIn,
+    qMod,
+    qRtk,
+    qGwi,
+    soilSt,
+    gwSt
+  );
   const metrics = computeFitMetrics(flow15m, qMod, dayCodes, dayCounts, obsDaily);
 
   const [
@@ -996,7 +1024,7 @@ function calibrateCoupledSystem(
     R2, T2, K2,
     fInfil,
     sMax, sInit, sThresh, kPerc, pPerc, etDay,
-    gInit, gThresh, kGwi, pGwi, gBfThresh, kBf, baseOff,
+    gInit, gThresh, kGwi, pGwi, gBfThresh, kBf,
   ] = opt.x;
 
   const phiGw = 0.15;
@@ -1013,18 +1041,25 @@ function calibrateCoupledSystem(
       notes: `${mgPerIn.toFixed(4)} MG per inch of rainfall`,
     },
     {
-      icmObject: 'Wastewater Profile',
-      parameter: 'Observed Clean-Day Weighted DWF',
-      value: dwfWeightedMgd.toFixed(4),
+      icmObject: 'Subcatchment',
+      parameter: 'Baseline Flow (Constant Baseflow)',
+      value: baselineFlowMgd.toFixed(4),
       units: 'MGD',
-      notes: '5/7 Weekday + 2/7 Weekend clean dry-day baseline',
+      notes: 'User-defined constant baseline flow offset added to total hydrograph',
     },
     {
       icmObject: 'Wastewater Profile',
-      parameter: 'Calibrated Base Sanitary Flow',
-      value: (dwfWeightedMgd + baseOff).toFixed(4),
+      parameter: 'Mean Diurnal Sanitary Flow',
+      value: dwfWeightedMgd.toFixed(4),
       units: 'MGD',
-      notes: `DWF ${baseOff >= 0 ? '+' : ''}${baseOff.toFixed(4)} MGD offset when GWI = 0`,
+      notes: '5/7 Weekday + 2/7 Weekend clean dry-day diurnal profile',
+    },
+    {
+      icmObject: 'Subcatchment',
+      parameter: 'Total Dry-Weather Flow (Baseline + Diurnal)',
+      value: (baselineFlowMgd + dwfWeightedMgd).toFixed(4),
+      units: 'MGD',
+      notes: 'Q_total = Baseline Flow + Diurnal Flow + RTK + Groundwater Infiltration',
     },
     {
       icmObject: 'RTK Hydrograph',
@@ -1174,7 +1209,7 @@ function calibrateCoupledSystem(
       gInitFt: Number(gInitFt.toFixed(3)),
       gThreshFt: Number(gThreshFt.toFixed(3)),
       gBfThreshFt: Number(gBfThreshFt.toFixed(3)),
-      baseOffsetMgd: Number(baseOff.toFixed(4)),
+      baselineFlowMgd: Number(baselineFlowMgd.toFixed(4)),
       metrics,
       icmRows,
     },
@@ -1314,7 +1349,16 @@ export function runFullHydrologyPipeline(
   }
 
   onProgress?.(22, 'Extracting clean dry-weather days & 24-hr weekday/weekend diurnal profiles...');
-  const { summary: dwf, dwf15m } = extractDwfAndDiurnal(gridStartMs, flow15mSmooth, rain15mIn);
+  const baselineFlowMgd = Number.isFinite(config.baselineFlowMgd) ? config.baselineFlowMgd : 0;
+  const { summary: dwf, dwf15m: diurnal15m } = extractDwfAndDiurnal(
+    gridStartMs,
+    flow15mSmooth,
+    rain15mIn
+  );
+  const basePlusDiurnal15m = new Float64Array(nGrid);
+  for (let i = 0; i < nGrid; i++) {
+    basePlusDiurnal15m[i] = baselineFlowMgd + diurnal15m[i];
+  }
 
   onProgress?.(30, 'Isolating storm events & fitting 3-unit RTK hydrographs...');
   const events = fitEventsRtk(
@@ -1322,7 +1366,8 @@ export function runFullHydrologyPipeline(
     flow15mSmooth,
     rain15mInHr,
     rain15mIn,
-    dwf15m,
+    basePlusDiurnal15m,
+    baselineFlowMgd,
     mgPerInchOverArea,
     config.interEventGapHours,
     config.minEventDepthIn,
@@ -1352,7 +1397,8 @@ export function runFullHydrologyPipeline(
     gridStartMs,
     flow15mSmooth,
     rain15mIn,
-    dwf15m,
+    diurnal15m,
+    baselineFlowMgd,
     mgPerInchOverArea,
     areaAcres,
     dwf.weightedMeanMgd,
@@ -1365,16 +1411,21 @@ export function runFullHydrologyPipeline(
   onProgress?.(98, 'Packaging calibrated hydrographs & InfoWorks ICM tables...');
 
   const timestamps15m = new Array<number>(nGrid);
+  const diurnalFlowMgd = new Array<number>(nGrid);
   const dwfBaselineMgd = new Array<number>(nGrid);
-  const baseOff = calibrated.gim.baseOffsetMgd;
   for (let i = 0; i < nGrid; i++) {
     timestamps15m[i] = gridStartMs + i * MS_15M;
-    dwfBaselineMgd[i] = dwf15m[i] + baseOff;
+    diurnalFlowMgd[i] = diurnal15m[i];
+    dwfBaselineMgd[i] = basePlusDiurnal15m[i];
   }
 
   return {
-    config,
+    config: {
+      ...config,
+      baselineFlowMgd,
+    },
     areaAcres,
+    baselineFlowMgd,
     mgPerInchOverArea,
     periodStartIso: formatWallClockIso(gridStartMs),
     periodEndIso: formatWallClockIso(gridEndMs),
@@ -1390,6 +1441,7 @@ export function runFullHydrologyPipeline(
       rainDepthIn: Array.from(rain15mIn),
       flowObservedSmoothMgd: Array.from(flow15mSmooth),
       flowRawInterpMgd: Array.from(flow15mRaw),
+      diurnalFlowMgd,
       dwfBaselineMgd,
       modeledTotalMgd: Array.from(calibrated.modeledTotalMgd),
       rtkFastMedMgd: Array.from(calibrated.rtkFastMedMgd),

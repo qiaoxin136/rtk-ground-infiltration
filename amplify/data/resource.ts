@@ -7,6 +7,7 @@ const schema = a.schema({
       projectName: a.string().required(),
       areaValue: a.float().required(),
       areaUnit: a.string().required(),
+      baselineFlowMgd: a.float(),
       flowUnit: a.string().required(),
       rainUnit: a.string().required(),
       flowFileName: a.string(),

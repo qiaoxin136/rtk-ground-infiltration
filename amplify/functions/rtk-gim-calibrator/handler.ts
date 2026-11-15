@@ -17,18 +17,38 @@ function roundArray5(arr: number[]): number[] {
 
 function compactFullResult(res: FullAnalysisResult): FullAnalysisResult {
   const s = res.series15m;
+  const baseRounded = Math.round(res.baselineFlowMgd * 100000) / 100000;
+  const diurnalRounded = roundArray5(s.diurnalFlowMgd);
+  const rtkRounded = roundArray5(s.rtkFastMedMgd);
+  const gwiRounded = roundArray5(s.gimGroundwaterMgd);
+  const n = s.timestampsMs.length;
+  const dwfBaselineRounded = new Array<number>(n);
+  const modeledTotalRounded = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    dwfBaselineRounded[i] = Math.round((baseRounded + diurnalRounded[i]) * 100000) / 100000;
+    modeledTotalRounded[i] =
+      Math.round((baseRounded + diurnalRounded[i] + rtkRounded[i] + gwiRounded[i]) * 100000) /
+      100000;
+  }
+
   return {
     ...res,
+    baselineFlowMgd: baseRounded,
+    config: {
+      ...res.config,
+      baselineFlowMgd: baseRounded,
+    },
     series15m: {
       timestampsMs: s.timestampsMs,
       rainInHr: roundArray5(s.rainInHr),
       rainDepthIn: roundArray5(s.rainDepthIn),
       flowObservedSmoothMgd: roundArray5(s.flowObservedSmoothMgd),
       flowRawInterpMgd: roundArray5(s.flowRawInterpMgd),
-      dwfBaselineMgd: roundArray5(s.dwfBaselineMgd),
-      modeledTotalMgd: roundArray5(s.modeledTotalMgd),
-      rtkFastMedMgd: roundArray5(s.rtkFastMedMgd),
-      gimGroundwaterMgd: roundArray5(s.gimGroundwaterMgd),
+      diurnalFlowMgd: diurnalRounded,
+      dwfBaselineMgd: dwfBaselineRounded,
+      modeledTotalMgd: modeledTotalRounded,
+      rtkFastMedMgd: rtkRounded,
+      gimGroundwaterMgd: gwiRounded,
       pureLinearRtkTotalMgd: roundArray5(s.pureLinearRtkTotalMgd),
       soilStorageIn: roundArray5(s.soilStorageIn),
       gwStorageIn: roundArray5(s.gwStorageIn),
@@ -51,6 +71,7 @@ export const handler: Schema['runCloudCalibration']['functionHandler'] = async (
       rainUnit: rawConfig.rainUnit ?? 'in/hr',
       areaValue: rawConfig.areaValue ?? 268,
       areaUnit: rawConfig.areaUnit ?? 'acres',
+      baselineFlowMgd: rawConfig.baselineFlowMgd ?? 0,
       smoothWindowMinOverride: rawConfig.smoothWindowMinOverride ?? null,
       enablePumpSmoothing: rawConfig.enablePumpSmoothing ?? true,
       interEventGapHours: rawConfig.interEventGapHours ?? 6,
@@ -106,6 +127,7 @@ export const handler: Schema['runCloudCalibration']['functionHandler'] = async (
       periodStartIso: full.periodStartIso,
       periodEndIso: full.periodEndIso,
       areaAcres: full.areaAcres,
+      baselineFlowMgd: full.baselineFlowMgd,
       totalRainDepthIn: full.totalRainDepthIn,
       dwfWeightedMgd: full.dwf.weightedMeanMgd,
       eventCount: full.events.length,
