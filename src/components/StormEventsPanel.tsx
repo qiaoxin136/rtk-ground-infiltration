@@ -1,6 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Download, Focus } from 'lucide-react';
-import { buildEventRtkCsv, triggerTextDownload } from '../engine/exporters';
+import { Check, Copy, Download, Focus } from 'lucide-react';
+import {
+  buildEventRtkCsv,
+  buildEventRtkTsv,
+  copyTextToClipboard,
+  triggerTextDownload,
+} from '../engine/exporters';
 import { convertFlowFromMgd } from '../engine/parser';
 import type { FlowUnit, FullAnalysisResult, StormEventRtk } from '../engine/types';
 
@@ -18,6 +23,7 @@ export const StormEventsPanel: React.FC<StormEventsPanelProps> = ({
   onSelectEvent,
 }) => {
   const [onlyLongTail, setOnlyLongTail] = useState(false);
+  const [copiedEvents, setCopiedEvents] = useState(false);
 
   const filtered = useMemo(
     () =>
@@ -26,6 +32,14 @@ export const StormEventsPanel: React.FC<StormEventsPanelProps> = ({
         : result.events,
     [result.events, onlyLongTail]
   );
+
+  const handleCopyEventsTable = async () => {
+    const ok = await copyTextToClipboard(buildEventRtkTsv(filtered, displayFlowUnit));
+    if (ok) {
+      setCopiedEvents(true);
+      setTimeout(() => setCopiedEvents(false), 2000);
+    }
+  };
 
   const activeEvent = useMemo(
     () =>
@@ -113,6 +127,15 @@ export const StormEventsPanel: React.FC<StormEventsPanelProps> = ({
               />
               Long GW tails only (≥{result.config.longTailThresholdHours}h)
             </label>
+            <button
+              type="button"
+              className={`btn-secondary ${copiedEvents ? 'btn-copied' : ''}`}
+              onClick={handleCopyEventsTable}
+              disabled={filtered.length === 0}
+            >
+              {copiedEvents ? <Check size={14} /> : <Copy size={14} />}
+              {copiedEvents ? `Copied ${filtered.length} Rows` : 'Copy Table'}
+            </button>
             <button
               type="button"
               className="btn-secondary"

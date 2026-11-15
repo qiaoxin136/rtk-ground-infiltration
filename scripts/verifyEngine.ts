@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  buildDiurnalTsv,
+  buildEventRtkTsv,
+  buildIcmParametersTsv,
+} from '../src/engine/exporters';
 import { runFullHydrologyPipeline } from '../src/engine/hydrology';
 import type { AnalysisConfig } from '../src/engine/types';
 
@@ -87,5 +92,21 @@ for (let i = 0; i < resOffset.series15m.modeledTotalMgd.length; i++) {
     throw new Error(`Offset superposition mismatch at step ${i}: ${resOffset.series15m.modeledTotalMgd[i]} vs ${sum4}`);
   }
 }
+const diurnalTsv = buildDiurnalTsv(res, 'MGD').split('\n');
+if (diurnalTsv.length !== 25 || diurnalTsv[0] !== 'Hour\tWeekday (MGD)\tWD Factor\tWeekend (MGD)\tWE Factor') {
+  throw new Error(`Unexpected diurnal TSV header/length: ${diurnalTsv.length}, ${diurnalTsv[0]}`);
+}
+if (diurnalTsv[1].split('\t').length !== 5 || !diurnalTsv[1].startsWith('00:00\t')) {
+  throw new Error(`Unexpected diurnal TSV first row: ${diurnalTsv[1]}`);
+}
+const rtkTsv = buildEventRtkTsv(res.events, 'cfs').split('\n');
+if (rtkTsv.length !== res.events.length + 1 || !rtkTsv[0].includes('Peak RDII (cfs)')) {
+  throw new Error(`Unexpected event RTK TSV: ${rtkTsv.length}, ${rtkTsv[0]}`);
+}
+const icmTsv = buildIcmParametersTsv(res).split('\n');
+if (icmTsv.length !== res.gim.icmRows.length + 1 || icmTsv[0].split('\t').length !== 5) {
+  throw new Error(`Unexpected ICM TSV: ${icmTsv.length}, ${icmTsv[0]}`);
+}
+console.log('Verified TSV clipboard exporters (24-hr Diurnal, Storm RTK, and InfoWorks ICM tables)');
 console.log('Verified 4-term superposition: Total Flow = Baseline + Diurnal + RTK + GWI (exact across 9,985 steps)');
 console.log('ALL HYDROLOGY ENGINE VERIFICATION CHECKS PASSED!');

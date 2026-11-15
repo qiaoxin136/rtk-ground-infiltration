@@ -1,6 +1,11 @@
-import React from 'react';
-import { Activity, Download, Focus } from 'lucide-react';
-import { buildDiurnalCsv, triggerTextDownload } from '../engine/exporters';
+import React, { useState } from 'react';
+import { Activity, Check, Copy, Download, Focus } from 'lucide-react';
+import {
+  buildDiurnalCsv,
+  buildDiurnalTsv,
+  copyTextToClipboard,
+  triggerTextDownload,
+} from '../engine/exporters';
 import { convertFlowFromMgd, formatWallClockIso } from '../engine/parser';
 import type { FlowUnit, FullAnalysisResult } from '../engine/types';
 
@@ -15,7 +20,16 @@ export const DwfAndPumpPanel: React.FC<DwfAndPumpPanelProps> = ({
   displayFlowUnit,
   onZoomToWindow,
 }) => {
+  const [copiedDiurnal, setCopiedDiurnal] = useState(false);
   const { dwf, pump } = result;
+
+  const handleCopyDiurnalTable = async () => {
+    const ok = await copyTextToClipboard(buildDiurnalTsv(result, displayFlowUnit));
+    if (ok) {
+      setCopiedDiurnal(true);
+      setTimeout(() => setCopiedDiurnal(false), 2000);
+    }
+  };
 
   // Build 24-hour diurnal multiplier SVG coordinates
   const w = 480;
@@ -52,15 +66,25 @@ export const DwfAndPumpPanel: React.FC<DwfAndPumpPanelProps> = ({
               24-Hour Weekday vs. Weekend Diurnal Pattern ({dwf.cleanDryDayCount} Clean Dry Days)
             </h3>
           </div>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() =>
-              triggerTextDownload('diurnal_patterns_24hr.csv', buildDiurnalCsv(result))
-            }
-          >
-            <Download size={14} /> Export 24-Hr CSV
-          </button>
+          <div className="panel-actions">
+            <button
+              type="button"
+              className={`btn-secondary ${copiedDiurnal ? 'btn-copied' : ''}`}
+              onClick={handleCopyDiurnalTable}
+            >
+              {copiedDiurnal ? <Check size={14} /> : <Copy size={14} />}
+              {copiedDiurnal ? 'Copied 24 Rows' : 'Copy Table'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() =>
+                triggerTextDownload('diurnal_patterns_24hr.csv', buildDiurnalCsv(result))
+              }
+            >
+              <Download size={14} /> Export 24-Hr CSV
+            </button>
+          </div>
         </div>
 
         <div className="dwf-stat-strip">
@@ -248,6 +272,20 @@ export const DwfAndPumpPanel: React.FC<DwfAndPumpPanelProps> = ({
               {formatWallClockIso(dwf.sampleStormStartMs, false)})
             </button>
           </div>
+        </div>
+
+        <div className="table-caption-bar">
+          <span className="table-caption-label">
+            24-Hr Diurnal Table ({displayFlowUnit})
+          </span>
+          <button
+            type="button"
+            className={`btn-secondary btn-compact ${copiedDiurnal ? 'btn-copied' : ''}`}
+            onClick={handleCopyDiurnalTable}
+          >
+            {copiedDiurnal ? <Check size={13} /> : <Copy size={13} />}
+            {copiedDiurnal ? 'Copied 24 Rows' : 'Copy Table'}
+          </button>
         </div>
 
         <div className="table-scroll-wrap compact-diurnal-table">

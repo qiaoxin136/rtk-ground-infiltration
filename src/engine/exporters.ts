@@ -1,5 +1,51 @@
-import { formatWallClockIso } from './parser';
-import type { FullAnalysisResult } from './types';
+import { convertFlowFromMgd, formatWallClockIso } from './parser';
+import type { FlowUnit, FullAnalysisResult, StormEventRtk } from './types';
+
+function sanitizeTsvCell(val: string | number): string {
+  return String(val).replace(/[\t\r\n]+/g, ' ').trim();
+}
+
+function execCommandCopyFallback(text: string): boolean {
+  if (typeof document === 'undefined') return false;
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  document.body.removeChild(textarea);
+  return ok;
+}
+
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  const inIframe = typeof window !== 'undefined' && window !== window.top;
+  if (inIframe) {
+    const syncOk = execCommandCopyFallback(text);
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => undefined);
+    }
+    if (syncOk) return true;
+  }
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back to synchronous textarea copy below
+    }
+  }
+  return execCommandCopyFallback(text);
+}
 
 function escapeCsv(val: string | number): string {
   const s = String(val);
@@ -99,6 +145,113 @@ export function buildDiurnalCsv(res: FullAnalysisResult): string {
         row.weekendFlowMgd.toFixed(4),
         row.weekendFactor.toFixed(4),
       ].join(',')
+    );
+  }
+  return lines.join('\n');
+}
+
+export function buildDiurnalTsv(
+  res: FullAnalysisResult,
+  displayFlowUnit: FlowUnit = 'MGD'
+): string {
+  const headers = [
+    'Hour',
+    `Weekday (${displayFlowUnit})`,
+    'WD Factor',
+    `Weekend (${displayFlowUnit})`,
+    'WE Factor',
+  ];
+  const lines = [headers.join('\t')];
+  for (const row of res.dwf.diurnal) {
+    lines.push(
+      [
+        `${String(row.hour).padStart(2, '0')}:00`,
+        convertFlowFromMgd(row.weekdayFlowMgd, displayFlowUnit).toFixed(3),
+        row.weekdayFactor.toFixed(3),
+        convertFlowFromMgd(row.weekendFlowMgd, displayFlowUnit).toFixed(3),
+        row.weekendFactor.toFixed(3),
+      ].join('\t')
+    );
+  }
+  return lines.join('\n');
+}
+
+export function buildEventRtkTsv(
+  events: StormEventRtk[],
+  displayFlowUnit: FlowUnit = 'MGD'
+): string {
+  const headers = [
+    'ID',
+    'Storm Start',
+    'Storm End',
+    'Duration (hr)',
+    'Rain (in)',
+    'Peak (in/hr)',
+    `Peak RDII (${displayFlowUnit})`,
+    'Excess (MG)',
+    'R_emp',
+    'R_fit',
+    'R1',
+    'T1 (hr)',
+    'K1',
+    'R2',
+    'T2 (hr)',
+    'K2',
+    'R3',
+    'T3 (hr)',
+    'K3',
+    'NSE',
+    'Tail >0.1 MGD (hr)',
+    'Long GW Tail',
+  ];
+  const lines = [headers.join('\t')];
+  for (const e of events) {
+    lines.push(
+      [
+        `E${e.eventId}`,
+        e.startIso,
+        e.endIso,
+        e.durationHours.toFixed(2),
+        e.totalRainIn.toFixed(2),
+        e.peakIntensityInHr.toFixed(2),
+        convertFlowFromMgd(e.peakRdiiMgd, displayFlowUnit).toFixed(2),
+        e.excessVolumeMg.toFixed(2),
+        e.rEmpirical.toFixed(3),
+        e.rTotalFit.toFixed(3),
+        e.R1.toFixed(4),
+        e.T1.toFixed(2),
+        e.K1.toFixed(2),
+        e.R2.toFixed(4),
+        e.T2.toFixed(2),
+        e.K2.toFixed(2),
+        e.R3.toFixed(4),
+        e.T3.toFixed(2),
+        e.K3.toFixed(2),
+        e.nse.toFixed(2),
+        e.tailHoursGt01Mgd.toFixed(1),
+        e.hasLongGroundwaterTail ? 'YES' : 'NO',
+      ]
+        .map(sanitizeTsvCell)
+        .join('\t')
+    );
+  }
+  return lines.join('\n');
+}
+
+export function buildIcmParametersTsv(res: FullAnalysisResult): string {
+  const headers = [
+    'InfoWorks ICM Object',
+    'Parameter',
+    'Calibrated Value',
+    'Units',
+    'Engineering Notes',
+  ];
+  const lines = [headers.join('\t')];
+  for (const row of res.gim.icmRows) {
+    lines.push(
+      [row.icmObject, row.parameter, row.value, row.units, row.notes]
+        .map(sanitizeTsvCell)
+        .join('\t')
     );
   }
   return lines.join('\n');

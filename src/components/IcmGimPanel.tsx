@@ -3,6 +3,8 @@ import { Check, Copy, Download } from 'lucide-react';
 import {
   buildAlignedSeriesCsv,
   buildIcmParametersCsv,
+  buildIcmParametersTsv,
+  copyTextToClipboard,
   triggerTextDownload,
 } from '../engine/exporters';
 import type { FullAnalysisResult } from '../engine/types';
@@ -16,10 +18,11 @@ export const IcmGimPanel: React.FC<IcmGimPanelProps> = ({ result }) => {
   const { gim, series15m } = result;
 
   const copyIcmTable = async () => {
-    const csv = buildIcmParametersCsv(result);
-    await navigator.clipboard.writeText(csv);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyTextToClipboard(buildIcmParametersTsv(result));
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   // Build compact SVG path of continuous Soil Storage S(t) and Groundwater Storage G(t)
@@ -320,9 +323,13 @@ export const IcmGimPanel: React.FC<IcmGimPanelProps> = ({ result }) => {
             </p>
           </div>
           <div className="panel-actions">
-            <button type="button" className="btn-secondary" onClick={copyIcmTable}>
+            <button
+              type="button"
+              className={`btn-secondary ${copied ? 'btn-copied' : ''}`}
+              onClick={copyIcmTable}
+            >
               {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? 'Copied CSV' : 'Copy Table'}
+              {copied ? `Copied ${gim.icmRows.length} Rows` : 'Copy Table'}
             </button>
             <button
               type="button"
