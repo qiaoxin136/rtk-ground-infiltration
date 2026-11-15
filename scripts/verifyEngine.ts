@@ -7,6 +7,15 @@ import {
   buildIcmParametersTsv,
 } from '../src/engine/exporters';
 import { runFullHydrologyPipeline } from '../src/engine/hydrology';
+import {
+  computeDatasetOverlap,
+  deleteTelemetryDataset,
+  ensureSampleDatasetsSeeded,
+  listTelemetryDatasets,
+  loadTelemetryDatasetText,
+  updateTelemetryDatasetUnit,
+  uploadTelemetryDataset,
+} from '../src/lib/telemetryStorage';
 import type { AnalysisConfig } from '../src/engine/types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -109,4 +118,59 @@ if (icmTsv.length !== res.gim.icmRows.length + 1 || icmTsv[0].split('\t').length
 }
 console.log('Verified TSV clipboard exporters (24-hr Diurnal, Storm RTK, and InfoWorks ICM tables)');
 console.log('Verified 4-term superposition: Total Flow = Baseline + Diurnal + RTK + GWI (exact across 9,985 steps)');
+
+async function verifyTelemetryVault() {
+  const seeded = await ensureSampleDatasetsSeeded(flowText, rainText, true);
+  let list = await listTelemetryDatasets();
+  if (list.length !== 2) {
+    throw new Error(`Expected 2 seeded datasets, got ${list.length}`);
+  }
+
+  const uploadedRain = await uploadTelemetryDataset({
+    rawText: rainText,
+    fileName: 'Gauge_North.txt',
+    customName: 'North Rain Gauge',
+    kind: 'rain',
+    unit: 'in/hr',
+  });
+  const uploadedFlow = await uploadTelemetryDataset({
+    rawText: flowText,
+    fileName: 'Meter_South.txt',
+    customName: 'South Trunk Flow',
+    kind: 'flow',
+    unit: 'MGD',
+  });
+
+  list = await listTelemetryDatasets();
+  if (list.length !== 4) {
+    throw new Error(`Expected 4 datasets after upload, got ${list.length}`);
+  }
+
+  const overlap = computeDatasetOverlap(uploadedRain, uploadedFlow);
+  if (!overlap.hasOverlap || overlap.overlapDays < 100) {
+    throw new Error(`Unexpected dataset overlap: ${JSON.stringify(overlap)}`);
+  }
+
+  const updatedFlow = await updateTelemetryDatasetUnit(uploadedFlow, 'cfs');
+  if (updatedFlow.unit !== 'cfs') {
+    throw new Error(`Expected updated unit cfs, got ${updatedFlow.unit}`);
+  }
+
+  const loadedTxt = await loadTelemetryDatasetText(uploadedRain);
+  if (loadedTxt.length !== rainText.length) {
+    throw new Error(`Loaded rainfall text length mismatch: ${loadedTxt.length} vs ${rainText.length}`);
+  }
+
+  await deleteTelemetryDataset(uploadedRain);
+  list = await listTelemetryDatasets();
+  if (list.length !== 3 || !list.some((d) => d.id === seeded.rainId)) {
+    throw new Error(`Unexpected dataset list after delete: ${list.length}`);
+  }
+
+  console.log(
+    `Verified Telemetry Storage Vault: upload, metadata inspection (${uploadedFlow.recordCount} pts, ${overlap.overlapDays.toFixed(1)}d overlap), unit update, load & delete`
+  );
+}
+
+await verifyTelemetryVault();
 console.log('ALL HYDROLOGY ENGINE VERIFICATION CHECKS PASSED!');

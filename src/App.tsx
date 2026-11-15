@@ -6,6 +6,7 @@ import {
   Database,
   Download,
   FileUp,
+  HardDrive,
   Layers,
   LogOut,
   Play,
@@ -23,6 +24,7 @@ import { SplitHorizonCanvas } from './components/SplitHorizonCanvas';
 import { StormEventsPanel } from './components/StormEventsPanel';
 import { IcmGimPanel } from './components/IcmGimPanel';
 import { DwfAndPumpPanel } from './components/DwfAndPumpPanel';
+import { DataManagementPanel } from './components/DataManagementPanel';
 import { CloudSyncModal } from './components/CloudSyncModal';
 import { AuthScreen } from './components/AuthScreen';
 import {
@@ -32,6 +34,16 @@ import {
 } from './engine/exporters';
 import { convertFlowFromMgd } from './engine/parser';
 import { invokeLambdaFullCalibration, isAmplifyConfigured } from './lib/amplifyCloud';
+import {
+  deleteTelemetryDataset,
+  ensureSampleDatasetsSeeded,
+  listTelemetryDatasets,
+  loadTelemetryDatasetText,
+  updateTelemetryDatasetUnit,
+  uploadTelemetryDataset,
+  type StoredTelemetryDataset,
+  type TelemetryKind,
+} from './lib/telemetryStorage';
 import {
   getActiveAuthUser,
   signOutUser,
@@ -46,7 +58,7 @@ import type {
   StormEventRtk,
 } from './engine/types';
 
-type ActiveTab = 'events' | 'icm' | 'dwf';
+type ActiveTab = 'data' | 'events' | 'icm' | 'dwf';
 type ComputeEnginePreference = 'lambda' | 'worker';
 type ExecutionSource = 'aws-lambda' | 'local-fallback' | 'browser-worker';
 
@@ -80,6 +92,10 @@ export const App: React.FC = () => {
   const [flowRawText, setFlowRawText] = useState<string>('');
   const [rainRawText, setRainRawText] = useState<string>('');
 
+  const [datasets, setDatasets] = useState<StoredTelemetryDataset[]>([]);
+  const [selectedRainId, setSelectedRainId] = useState<string | null>(null);
+  const [selectedFlowId, setSelectedFlowId] = useState<string | null>(null);
+
   const [result, setResult] = useState<FullAnalysisResult | null>(null);
   const [zoomDomain, setZoomDomain] = useState<[number, number]>([0, 1]);
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
@@ -100,6 +116,7 @@ export const App: React.FC = () => {
   const workerRef = useRef<Worker | null>(null);
   const reqIdRef = useRef<number>(0);
   const workerSourceRef = useRef<ExecutionSource>('browser-worker');
+  const tabsSectionRef = useRef<HTMLDivElement | null>(null);
 
   const applyCalibrationOutput = useCallback(
     (res: FullAnalysisResult, durationMs: number, source: ExecutionSource) => {
@@ -150,7 +167,8 @@ export const App: React.FC = () => {
       fText: string,
       rText: string,
       cfg: AnalysisConfig,
-      enginePref: ComputeEnginePreference = computeEngine
+      enginePref: ComputeEnginePreference = computeEngine,
+      s3StoragePair?: { flowStoragePath?: string; rainStoragePath?: string }
     ) => {
       if (!fText.trim() || !rText.trim()) {
         setErrorMsg('Upload both a Rainfall file and a Sewer Flow file before running calibration.');
@@ -166,12 +184,18 @@ export const App: React.FC = () => {
         try {
           setProgressPct(8);
           setProgressStage('Dispatching calibration job to AWS Lambda (rtk-gim-calibrator)...');
-          const cloudRes = await invokeLambdaFullCalibration(fText, rText, cfg, (pct, stage) => {
-            if (reqIdRef.current === myReqId) {
-              setProgressPct(pct);
-              setProgressStage(stage);
-            }
-          });
+          const cloudRes = await invokeLambdaFullCalibration(
+            fText,
+            rText,
+            cfg,
+            (pct, stage) => {
+              if (reqIdRef.current === myReqId) {
+                setProgressPct(pct);
+                setProgressStage(stage);
+              }
+            },
+            s3StoragePair
+          );
           if (reqIdRef.current !== myReqId) return;
           applyCalibrationOutput(cloudRes.result, cloudRes.computeMs, 'aws-lambda');
           return;
@@ -219,6 +243,12 @@ export const App: React.FC = () => {
         throw new Error('Sample telemetry files could not be fetched.');
       }
       const [fTxt, rTxt] = await Promise.all([fRes.text(), rRes.text()]);
+      const seeded = await ensureSampleDatasetsSeeded(fTxt, rTxt, true);
+      const catalog = await listTelemetryDatasets();
+      setDatasets(catalog);
+      setSelectedRainId(seeded.rainId);
+      setSelectedFlowId(seeded.flowId);
+
       setFlowFileName('TFM02.txt');
       setRainFileName('Rainfall.txt');
       setFlowRawText(fTxt);
@@ -272,18 +302,195 @@ export const App: React.FC = () => {
     setAuthUser(null);
   };
 
+  const openDataManagementPanel = () => {
+    setActiveTab('data');
+    setTimeout(() => {
+      tabsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 40);
+  };
+
+  const handleSelectRainDataset = async (ds: StoredTelemetryDataset) => {
+    setSelectedRainId(ds.id);
+    try {
+      const text = await loadTelemetryDatasetText(ds);
+      const unit = ds.unit as RainUnit;
+      setRainFileName(ds.fileName);
+      setRainRawText(text);
+      setConfig((prev) => ({ ...prev, rainUnit: unit }));
+      setDisplayRainUnit(unit);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleSelectFlowDataset = async (ds: StoredTelemetryDataset) => {
+    setSelectedFlowId(ds.id);
+    try {
+      const text = await loadTelemetryDatasetText(ds);
+      const unit = ds.unit as FlowUnit;
+      setFlowFileName(ds.fileName);
+      setFlowRawText(text);
+      setConfig((prev) => ({ ...prev, flowUnit: unit }));
+      setDisplayFlowUnit(unit);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleVaultUpload = async ({
+    files,
+    kind,
+    unit,
+    customName,
+  }: {
+    files: File[];
+    kind: TelemetryKind;
+    unit: RainUnit | FlowUnit;
+    customName: string;
+  }) => {
+    let lastCreated: StoredTelemetryDataset | null = null;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const rawText = await f.text();
+      const label =
+        files.length === 1
+          ? customName
+          : customName.trim()
+            ? `${customName.trim()} (${i + 1})`
+            : '';
+      lastCreated = await uploadTelemetryDataset({
+        rawText,
+        fileName: f.name,
+        customName: label,
+        kind,
+        unit,
+      });
+    }
+    const catalog = await listTelemetryDatasets();
+    setDatasets(catalog);
+    if (lastCreated) {
+      if (kind === 'rain') {
+        await handleSelectRainDataset(lastCreated);
+      } else {
+        await handleSelectFlowDataset(lastCreated);
+      }
+    }
+  };
+
+  const handleChangeDatasetUnit = async (
+    ds: StoredTelemetryDataset,
+    nextUnit: RainUnit | FlowUnit
+  ) => {
+    const updated = await updateTelemetryDatasetUnit(ds, nextUnit);
+    const catalog = await listTelemetryDatasets();
+    setDatasets(catalog);
+    if (ds.kind === 'rain' && ds.id === selectedRainId) {
+      setConfig((prev) => ({ ...prev, rainUnit: updated.unit as RainUnit }));
+      setDisplayRainUnit(updated.unit as RainUnit);
+    } else if (ds.kind === 'flow' && ds.id === selectedFlowId) {
+      setConfig((prev) => ({ ...prev, flowUnit: updated.unit as FlowUnit }));
+      setDisplayFlowUnit(updated.unit as FlowUnit);
+    }
+  };
+
+  const handleDeleteDataset = async (ds: StoredTelemetryDataset) => {
+    await deleteTelemetryDataset(ds);
+    const catalog = await listTelemetryDatasets();
+    setDatasets(catalog);
+    if (ds.kind === 'rain' && ds.id === selectedRainId) {
+      const nextRain = catalog.find((item) => item.kind === 'rain') ?? null;
+      if (nextRain) {
+        await handleSelectRainDataset(nextRain);
+      } else {
+        setSelectedRainId(null);
+        setRainFileName('');
+        setRainRawText('');
+      }
+    } else if (ds.kind === 'flow' && ds.id === selectedFlowId) {
+      const nextFlow = catalog.find((item) => item.kind === 'flow') ?? null;
+      if (nextFlow) {
+        await handleSelectFlowDataset(nextFlow);
+      } else {
+        setSelectedFlowId(null);
+        setFlowFileName('');
+        setFlowRawText('');
+      }
+    }
+  };
+
+  const handleRestoreSampleDatasets = async () => {
+    const [fRes, rRes] = await Promise.all([
+      fetch('/sample-data/TFM02.txt'),
+      fetch('/sample-data/Rainfall.txt'),
+    ]);
+    if (!fRes.ok || !rRes.ok) {
+      throw new Error('Sample files could not be fetched.');
+    }
+    const [fTxt, rTxt] = await Promise.all([fRes.text(), rRes.text()]);
+    const seeded = await ensureSampleDatasetsSeeded(fTxt, rTxt, true);
+    const catalog = await listTelemetryDatasets();
+    setDatasets(catalog);
+    if (!selectedRainId) {
+      const rDs = catalog.find((d) => d.id === seeded.rainId);
+      if (rDs) await handleSelectRainDataset(rDs);
+    }
+    if (!selectedFlowId) {
+      const fDs = catalog.find((d) => d.id === seeded.flowId);
+      if (fDs) await handleSelectFlowDataset(fDs);
+    }
+  };
+
+  const handleAnalyzeSelectedPair = async () => {
+    const selRain = datasets.find((d) => d.id === selectedRainId && d.kind === 'rain');
+    const selFlow = datasets.find((d) => d.id === selectedFlowId && d.kind === 'flow');
+    if (!selRain || !selFlow) {
+      setErrorMsg('Select both one Rainfall dataset and one Sewer Flow dataset to analyze.');
+      return;
+    }
+    try {
+      const [rTxt, fTxt] = await Promise.all([
+        loadTelemetryDatasetText(selRain),
+        loadTelemetryDatasetText(selFlow),
+      ]);
+      const nextCfg: AnalysisConfig = {
+        ...config,
+        rainUnit: selRain.unit as RainUnit,
+        flowUnit: selFlow.unit as FlowUnit,
+      };
+      setConfig(nextCfg);
+      setRainFileName(selRain.fileName);
+      setFlowFileName(selFlow.fileName);
+      setRainRawText(rTxt);
+      setFlowRawText(fTxt);
+      setDisplayRainUnit(selRain.unit as RainUnit);
+      setDisplayFlowUnit(selFlow.unit as FlowUnit);
+      setActiveTab('events');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      await executeCalibration(fTxt, rTxt, nextCfg, computeEngine, {
+        flowStoragePath: selFlow.source === 'amplify-s3' ? selFlow.storagePath : undefined,
+        rainStoragePath: selRain.source === 'amplify-s3' ? selRain.storagePath : undefined,
+      });
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleFileUpload = async (
     file: File | undefined,
     kind: 'flow' | 'rain'
   ) => {
     if (!file) return;
-    const text = await file.text();
-    if (kind === 'flow') {
-      setFlowFileName(file.name);
-      setFlowRawText(text);
-    } else {
-      setRainFileName(file.name);
-      setRainRawText(text);
+    try {
+      setErrorMsg(null);
+      const unit = kind === 'rain' ? config.rainUnit : config.flowUnit;
+      await handleVaultUpload({
+        files: [file],
+        kind,
+        unit,
+        customName: '',
+      });
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -381,6 +588,14 @@ export const App: React.FC = () => {
 
           <button
             type="button"
+            className={`btn-secondary ${activeTab === 'data' ? 'btn-active-data' : ''}`}
+            onClick={openDataManagementPanel}
+          >
+            <HardDrive size={14} /> Data Management ({datasets.length})
+          </button>
+
+          <button
+            type="button"
             className="btn-secondary"
             onClick={loadBuiltInSample}
             disabled={isCalibrating}
@@ -417,7 +632,16 @@ export const App: React.FC = () => {
         {/* Left Rail: Telemetry Upload, Units, Basin Area & Calibration Controls */}
         <aside className="config-rail">
           <div className="instrument-panel rail-card">
-            <div className="eyebrow-tag">1 · TELEMETRY &amp; UNITS</div>
+            <div className="rail-section-head">
+              <div className="eyebrow-tag">1 · TELEMETRY &amp; UNITS</div>
+              <button
+                type="button"
+                className="rail-vault-link"
+                onClick={openDataManagementPanel}
+              >
+                <HardDrive size={11} /> Manage Storage ({datasets.length})
+              </button>
+            </div>
             <label className="field-label">
               Basin / Meter Name
               <input
@@ -428,7 +652,7 @@ export const App: React.FC = () => {
               />
             </label>
 
-            {/* Rainfall Upload + Input Unit */}
+            {/* Rainfall Upload + Stored Selector + Input Unit */}
             <div className="upload-box">
               <div className="upload-box-top">
                 <span className="upload-title">
@@ -439,13 +663,36 @@ export const App: React.FC = () => {
                   <input
                     type="file"
                     accept=".txt,.csv,.tsv,.dat"
-                    onChange={(e) => handleFileUpload(e.target.files?.[0], 'rain')}
+                    onChange={(e) => {
+                      void handleFileUpload(e.target.files?.[0], 'rain');
+                      e.target.value = '';
+                    }}
                   />
                 </label>
               </div>
-              <div className="file-name-chip" title={rainFileName}>
-                {rainFileName} ({rainRawText ? `${(rainRawText.length / 1024).toFixed(0)} KB` : '...'})
-              </div>
+              {datasets.some((d) => d.kind === 'rain') ? (
+                <select
+                  aria-label="Stored rainfall dataset"
+                  className="stored-select"
+                  value={selectedRainId ?? ''}
+                  onChange={(e) => {
+                    const ds = datasets.find((d) => d.id === e.target.value);
+                    if (ds) void handleSelectRainDataset(ds);
+                  }}
+                >
+                  {datasets
+                    .filter((d) => d.kind === 'rain')
+                    .map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} ({d.unit})
+                      </option>
+                    ))}
+                </select>
+              ) : (
+                <div className="file-name-chip" title={rainFileName}>
+                  {rainFileName || 'No rainfall file selected'}
+                </div>
+              )}
               <div className="inline-unit-row">
                 <span>File Rain Unit</span>
                 <select
@@ -454,6 +701,8 @@ export const App: React.FC = () => {
                     const nextU = e.target.value as RainUnit;
                     setConfig({ ...config, rainUnit: nextU });
                     setDisplayRainUnit(nextU);
+                    const cur = datasets.find((d) => d.id === selectedRainId);
+                    if (cur) void handleChangeDatasetUnit(cur, nextU);
                   }}
                 >
                   <option value="in/hr">in/hr (Intensity)</option>
@@ -464,7 +713,7 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Flow Upload + Input Unit */}
+            {/* Flow Upload + Stored Selector + Input Unit */}
             <div className="upload-box">
               <div className="upload-box-top">
                 <span className="upload-title">
@@ -475,13 +724,36 @@ export const App: React.FC = () => {
                   <input
                     type="file"
                     accept=".txt,.csv,.tsv,.dat"
-                    onChange={(e) => handleFileUpload(e.target.files?.[0], 'flow')}
+                    onChange={(e) => {
+                      void handleFileUpload(e.target.files?.[0], 'flow');
+                      e.target.value = '';
+                    }}
                   />
                 </label>
               </div>
-              <div className="file-name-chip" title={flowFileName}>
-                {flowFileName} ({flowRawText ? `${(flowRawText.length / 1024).toFixed(0)} KB` : '...'})
-              </div>
+              {datasets.some((d) => d.kind === 'flow') ? (
+                <select
+                  aria-label="Stored sewer flow dataset"
+                  className="stored-select"
+                  value={selectedFlowId ?? ''}
+                  onChange={(e) => {
+                    const ds = datasets.find((d) => d.id === e.target.value);
+                    if (ds) void handleSelectFlowDataset(ds);
+                  }}
+                >
+                  {datasets
+                    .filter((d) => d.kind === 'flow')
+                    .map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} ({d.unit})
+                      </option>
+                    ))}
+                </select>
+              ) : (
+                <div className="file-name-chip" title={flowFileName}>
+                  {flowFileName || 'No flow file selected'}
+                </div>
+              )}
               <div className="inline-unit-row">
                 <span>File Flow Unit</span>
                 <select
@@ -490,6 +762,8 @@ export const App: React.FC = () => {
                     const nextU = e.target.value as FlowUnit;
                     setConfig({ ...config, flowUnit: nextU });
                     setDisplayFlowUnit(nextU);
+                    const cur = datasets.find((d) => d.id === selectedFlowId);
+                    if (cur) void handleChangeDatasetUnit(cur, nextU);
                   }}
                 >
                   <option value="MGD">MGD</option>
@@ -785,7 +1059,16 @@ export const App: React.FC = () => {
               />
 
               {/* Subsurface & Hydrograph Calibration Workbench Tabs */}
-              <div className="tab-navigation" role="tablist">
+              <div ref={tabsSectionRef} className="tab-navigation" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'data'}
+                  className={activeTab === 'data' ? 'tab-btn active' : 'tab-btn'}
+                  onClick={() => setActiveTab('data')}
+                >
+                  <HardDrive size={14} /> Data Management ({datasets.length})
+                </button>
                 <button
                   type="button"
                   role="tab"
@@ -816,6 +1099,22 @@ export const App: React.FC = () => {
                 </button>
               </div>
 
+              {activeTab === 'data' && (
+                <DataManagementPanel
+                  datasets={datasets}
+                  selectedRainId={selectedRainId}
+                  selectedFlowId={selectedFlowId}
+                  isCalibrating={isCalibrating}
+                  onSelectRain={handleSelectRainDataset}
+                  onSelectFlow={handleSelectFlowDataset}
+                  onUploadFiles={handleVaultUpload}
+                  onChangeDatasetUnit={handleChangeDatasetUnit}
+                  onDeleteDataset={handleDeleteDataset}
+                  onRestoreSamples={handleRestoreSampleDatasets}
+                  onAnalyzeSelectedPair={handleAnalyzeSelectedPair}
+                />
+              )}
+
               {activeTab === 'events' && (
                 <StormEventsPanel
                   result={result}
@@ -835,10 +1134,26 @@ export const App: React.FC = () => {
                 />
               )}
             </>
+          ) : activeTab === 'data' ? (
+            <div ref={tabsSectionRef}>
+              <DataManagementPanel
+                datasets={datasets}
+                selectedRainId={selectedRainId}
+                selectedFlowId={selectedFlowId}
+                isCalibrating={isCalibrating}
+                onSelectRain={handleSelectRainDataset}
+                onSelectFlow={handleSelectFlowDataset}
+                onUploadFiles={handleVaultUpload}
+                onChangeDatasetUnit={handleChangeDatasetUnit}
+                onDeleteDataset={handleDeleteDataset}
+                onRestoreSamples={handleRestoreSampleDatasets}
+                onAnalyzeSelectedPair={handleAnalyzeSelectedPair}
+              />
+            </div>
           ) : (
             <div className="instrument-panel loading-stage">
               <h3>Preparing Hydraulic Telemetry Workbench...</h3>
-              <p>{progressStage || 'Upload rainfall and flow data on the left to begin.'}</p>
+              <p>{progressStage || 'Open Data Management to upload and select rainfall & flow files.'}</p>
             </div>
           )}
         </main>

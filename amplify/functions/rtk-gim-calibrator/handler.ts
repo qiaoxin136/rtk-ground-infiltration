@@ -112,6 +112,37 @@ export const handler: Schema['runCloudCalibration']['functionHandler'] = async (
       const parsed = JSON.parse(jsonStr) as { flowText: string; rainText: string };
       flowText = parsed.flowText;
       rainText = parsed.rainText;
+    } else if (event.arguments.flowStoragePath && event.arguments.rainStoragePath) {
+      if (!bucketName) {
+        throw new Error('S3 bucket environment variable RTK_HYDROLOGY_STORAGE_BUCKET_NAME is not configured.');
+      }
+      const [flowObj, rainObj] = await Promise.all([
+        s3.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: event.arguments.flowStoragePath,
+          })
+        ),
+        s3.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: event.arguments.rainStoragePath,
+          })
+        ),
+      ]);
+      const [flowBytes, rainBytes] = await Promise.all([
+        flowObj.Body?.transformToByteArray(),
+        rainObj.Body?.transformToByteArray(),
+      ]);
+      if (!flowBytes || !rainBytes) {
+        throw new Error('Selected S3 rainfall or flow telemetry object was empty.');
+      }
+      const decodeBytes = (bytes: Uint8Array) =>
+        bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b
+          ? zlib.gunzipSync(Buffer.from(bytes)).toString('utf8')
+          : Buffer.from(bytes).toString('utf8');
+      flowText = decodeBytes(flowBytes);
+      rainText = decodeBytes(rainBytes);
     }
 
     if (!flowText.trim() || !rainText.trim()) {

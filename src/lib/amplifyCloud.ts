@@ -5,9 +5,11 @@ import type { Schema } from '../../amplify/data/resource';
 import type { AnalysisConfig, FullAnalysisResult } from '../engine/types';
 
 // Dynamically detect amplify_outputs.json (present after `npx ampx sandbox` or AWS Amplify pipeline-deploy)
-const globOutputs = import.meta.glob('../../amplify_outputs.json', {
-  eager: true,
-}) as Record<string, { default?: Record<string, unknown> }>;
+const globOutputs = (
+  typeof import.meta.glob === 'function'
+    ? import.meta.glob('../../amplify_outputs.json', { eager: true })
+    : {}
+) as Record<string, { default?: Record<string, unknown> }>;
 
 const rawOutputs = Object.values(globOutputs)[0]?.default ?? Object.values(globOutputs)[0];
 export const isAmplifyConfigured = Boolean(rawOutputs && Object.keys(rawOutputs).length > 0);
@@ -21,12 +23,15 @@ if (isAmplifyConfigured && rawOutputs) {
 }
 
 let cachedClient: ReturnType<typeof generateClient<Schema>> | null = null;
-function getClient() {
+export function getAmplifyDataClient() {
   if (!isAmplifyConfigured) return null;
   if (!cachedClient) {
     cachedClient = generateClient<Schema>();
   }
   return cachedClient;
+}
+function getClient() {
+  return getAmplifyDataClient();
 }
 
 export interface SavedBasinRecord {
@@ -265,11 +270,12 @@ export async function invokeLambdaFullCalibration(
   flowText: string,
   rainText: string,
   config: AnalysisConfig,
-  onProgress?: (pct: number, stage: string) => void
+  onProgress?: (pct: number, stage: string) => void,
+  s3StoragePair?: { flowStoragePath?: string; rainStoragePath?: string }
 ): Promise<{
   result: FullAnalysisResult;
   computeMs: number;
-  transport: 'inline-gzip' | 's3-gzip';
+  transport: 'inline-gzip' | 's3-gzip' | 's3-stored';
 }> {
   const client = getClient();
   if (!client) {
@@ -278,25 +284,40 @@ export async function invokeLambdaFullCalibration(
     );
   }
 
-  onProgress?.(12, 'Compressing rainfall & sewer flow telemetry for AWS Lambda...');
-  const inputJson = JSON.stringify({ flowText, rainText });
-  const gzInputBytes = await gzipStringToBytes(inputJson);
-  const gzInputB64 = uint8ToBase64(gzInputBytes);
-
-  let transport: 'inline-gzip' | 's3-gzip' = 'inline-gzip';
-  let payloadGzipBase64: string | undefined = gzInputB64;
+  let transport: 'inline-gzip' | 's3-gzip' | 's3-stored' = 'inline-gzip';
+  let payloadGzipBase64: string | undefined;
   let s3InputPath: string | undefined;
+  let flowStoragePath: string | undefined;
+  let rainStoragePath: string | undefined;
 
-  if (gzInputB64.length > INLINE_GZIP_LIMIT_B64) {
-    transport = 's3-gzip';
-    s3InputPath = `telemetry/jobs/input-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json.gz`;
-    payloadGzipBase64 = undefined;
-    onProgress?.(24, 'Uploading large compressed telemetry to AWS S3...');
-    await uploadData({
-      path: s3InputPath,
-      data: gzInputBytes,
-      options: { contentType: 'application/gzip' },
-    }).result;
+  if (
+    s3StoragePair?.flowStoragePath &&
+    s3StoragePair?.rainStoragePath &&
+    s3StoragePair.flowStoragePath.startsWith('telemetry/') &&
+    s3StoragePair.rainStoragePath.startsWith('telemetry/')
+  ) {
+    transport = 's3-stored';
+    flowStoragePath = s3StoragePair.flowStoragePath;
+    rainStoragePath = s3StoragePair.rainStoragePath;
+    onProgress?.(25, 'Reading selected S3 rainfall & flow datasets in AWS Lambda...');
+  } else {
+    onProgress?.(12, 'Compressing rainfall & sewer flow telemetry for AWS Lambda...');
+    const inputJson = JSON.stringify({ flowText, rainText });
+    const gzInputBytes = await gzipStringToBytes(inputJson);
+    const gzInputB64 = uint8ToBase64(gzInputBytes);
+    payloadGzipBase64 = gzInputB64;
+
+    if (gzInputB64.length > INLINE_GZIP_LIMIT_B64) {
+      transport = 's3-gzip';
+      s3InputPath = `telemetry/jobs/input-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json.gz`;
+      payloadGzipBase64 = undefined;
+      onProgress?.(24, 'Uploading large compressed telemetry to AWS S3...');
+      await uploadData({
+        path: s3InputPath,
+        data: gzInputBytes,
+        options: { contentType: 'application/gzip' },
+      }).result;
+    }
   }
 
   onProgress?.(45, 'Executing RTK + InfoWorks ICM 2-Store GIM on AWS Lambda...');
@@ -304,6 +325,8 @@ export async function invokeLambdaFullCalibration(
     configJson: JSON.stringify(config),
     payloadGzipBase64,
     s3InputPath,
+    flowStoragePath,
+    rainStoragePath,
   });
 
   if (res.errors && res.errors.length > 0) {

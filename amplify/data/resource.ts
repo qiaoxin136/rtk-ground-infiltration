@@ -2,6 +2,25 @@ import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
 import { rtkGimCalibrator } from '../functions/rtk-gim-calibrator/resource';
 
 const schema = a.schema({
+  TelemetryDataset: a
+    .model({
+      name: a.string().required(),
+      kind: a.string().required(),
+      fileName: a.string().required(),
+      unit: a.string().required(),
+      storagePath: a.string().required(),
+      sizeBytes: a.integer().required(),
+      recordCount: a.integer().required(),
+      intervalMin: a.float().required(),
+      startMs: a.float().required(),
+      endMs: a.float().required(),
+      startIso: a.string().required(),
+      endIso: a.string().required(),
+      peakValue: a.float(),
+      summaryStat: a.float(),
+    })
+    .authorization((allow) => [allow.authenticated()]),
+
   CalibrationProject: a
     .model({
       projectName: a.string().required(),
@@ -41,6 +60,8 @@ const schema = a.schema({
       configJson: a.string().required(),
       payloadGzipBase64: a.string(),
       s3InputPath: a.string(),
+      flowStoragePath: a.string(),
+      rainStoragePath: a.string(),
       flowText: a.string(),
       rainText: a.string(),
     })
